@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@vercel/kv';
+import PostalMime from 'postal-mime';
 
 const kv = createClient({
   url: process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL || '',
@@ -18,11 +19,24 @@ export async function POST(request: Request) {
     // Ekstrak alamat tujuan dengan huruf kecil semua (contoh: User@brepremiumstore.store -> user@brepremiumstore.store)
     const emailTo = tujuan.toLowerCase();
     
+    // Parse email mentah menggunakan postal-mime
+    let parsedEmail: any = {};
+    try {
+      const parser = new PostalMime();
+      parsedEmail = await parser.parse(isi_email_mentah);
+    } catch (e) {
+      console.error('Gagal parsing email', e);
+    }
+
     // Siapkan data email yang akan disimpan ke Vercel KV (Database)
     const newEmail = {
       id: Date.now().toString(),
-      from: dari || 'Unknown Sender',
+      from: parsedEmail.from?.address || dari || 'Unknown Sender',
+      fromName: parsedEmail.from?.name || '',
       to: emailTo,
+      subject: parsedEmail.subject || '(Tanpa Subjek)',
+      text: parsedEmail.text || '',
+      html: parsedEmail.html || '',
       rawBody: isi_email_mentah,
       receivedAt: new Date().toISOString()
     };

@@ -8,6 +8,7 @@ export default function TempMail() {
   const [emails, setEmails] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [selectedEmailId, setSelectedEmailId] = useState<string | null>(null);
 
   // Ganti domain ini dengan domain Cloudflare Anda
   const domain = 'brepremiumstore.store';
@@ -82,9 +83,23 @@ export default function TempMail() {
         <div className="bg-gray-900 border border-gray-800 rounded-3xl p-6 md:p-10 shadow-2xl backdrop-blur-xl">
           <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
             <div className="flex-1 w-full bg-black/50 border border-gray-800 rounded-2xl p-4 flex items-center justify-between group hover:border-gray-700 transition-colors">
-              <span className="text-xl md:text-2xl font-mono text-gray-200 select-all break-all">
-                {emailAddress || 'Generating...'}
-              </span>
+              <div className="flex items-center text-xl md:text-2xl font-mono text-gray-200 overflow-hidden w-full">
+                <input 
+                  type="text" 
+                  value={emailAddress ? emailAddress.split('@')[0] : ''}
+                  onChange={(e) => {
+                    const prefix = e.target.value.toLowerCase().replace(/[^a-z0-9.-]/g, '');
+                    if (!prefix) return;
+                    const newEmail = `${prefix}@${domain}`;
+                    setEmailAddress(newEmail);
+                    localStorage.setItem('temp_email', newEmail);
+                    setEmails([]);
+                  }}
+                  className="bg-transparent border-b-2 border-transparent hover:border-gray-600 focus:border-blue-500 focus:outline-none w-full max-w-[200px] md:max-w-[300px] text-right truncate"
+                  placeholder="Ketik nama..."
+                />
+                <span className="text-gray-500 shrink-0">@{domain}</span>
+              </div>
               <button 
                 onClick={copyToClipboard}
                 className="p-3 bg-gray-800 hover:bg-gray-700 rounded-xl transition-colors text-gray-300 hover:text-white shrink-0 ml-2"
@@ -134,17 +149,39 @@ export default function TempMail() {
             ) : (
               <div className="divide-y divide-gray-800">
                 {emails.map((email) => (
-                  <div key={email.id} className="p-6 hover:bg-gray-800/50 transition-colors">
-                    <div className="flex flex-col md:flex-row md:justify-between md:items-start mb-4 gap-2">
-                      <div>
-                        <h3 className="font-medium text-lg text-gray-200">Dari: {email.from}</h3>
-                        <p className="text-sm text-gray-500">{new Date(email.receivedAt).toLocaleString()}</p>
+                  <div key={email.id} className="p-0 hover:bg-gray-800/20 transition-colors">
+                    {/* Header Email (Klik untuk buka/tutup) */}
+                    <div 
+                      onClick={() => setSelectedEmailId(selectedEmailId === email.id ? null : email.id)}
+                      className="p-6 cursor-pointer flex flex-col md:flex-row md:justify-between md:items-center gap-2"
+                    >
+                      <div className="overflow-hidden">
+                        <h3 className="font-semibold text-lg text-gray-200 truncate">
+                          {email.fromName ? `${email.fromName} <${email.from}>` : email.from}
+                        </h3>
+                        <p className="text-gray-400 font-medium truncate mt-1">{email.subject}</p>
                       </div>
+                      <p className="text-sm text-gray-500 shrink-0">{new Date(email.receivedAt).toLocaleString()}</p>
                     </div>
-                    {/* Raw email content viewer */}
-                    <div className="bg-black/40 p-4 rounded-2xl text-sm font-mono text-gray-300 overflow-x-auto whitespace-pre-wrap max-h-96 overflow-y-auto border border-gray-800/50">
-                      {email.rawBody || 'Tidak ada konten / Gagal memproses'}
-                    </div>
+
+                    {/* Isi Email (Terbuka jika diklik) */}
+                    {selectedEmailId === email.id && (
+                      <div className="px-6 pb-6 pt-2 border-t border-gray-800/50">
+                        {email.html ? (
+                          <div className="bg-white rounded-2xl overflow-hidden mt-4 shadow-inner">
+                            <iframe 
+                              srcDoc={email.html} 
+                              className="w-full min-h-[500px] border-0 bg-white"
+                              sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin"
+                            />
+                          </div>
+                        ) : (
+                          <div className="bg-black/40 p-6 rounded-2xl text-base font-mono text-gray-300 overflow-x-auto whitespace-pre-wrap mt-4 border border-gray-800/50">
+                            {email.text || email.rawBody || 'Tidak ada konten teks / gagal memproses'}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
