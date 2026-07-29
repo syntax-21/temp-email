@@ -31,6 +31,7 @@ export default function TempMail() {
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [selectedEmailId, setSelectedEmailId] = useState<string | null>(null);
+  const [countdown, setCountdown] = useState(10);
 
   const domain = 'brepremiumstore.store';
 
@@ -46,9 +47,21 @@ export default function TempMail() {
 
   useEffect(() => {
     if (!emailAddress) return;
+    
     fetchEmails();
-    const interval = setInterval(fetchEmails, 10000); 
-    return () => clearInterval(interval);
+    setCountdown(10);
+    
+    const timer = setInterval(() => {
+      setCountdown((prev) => {
+        if (prev <= 1) {
+          fetchEmails();
+          return 10;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    
+    return () => clearInterval(timer);
   }, [emailAddress]);
 
   const generateRandomEmail = () => {
@@ -106,7 +119,7 @@ export default function TempMail() {
               TMail<span className="text-blue-500">.</span>
             </h1>
           </div>
-          <a href="#" className="text-sm font-medium text-slate-400 hover:text-white transition-colors">Premium</a>
+          {/* Removed Premium Text */}
         </div>
       </header>
 
@@ -128,13 +141,17 @@ export default function TempMail() {
             <p className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-3">Alamat Email Sementara Anda</p>
             
             <div className="flex flex-col sm:flex-row items-center gap-3 w-full">
-              <div className="relative w-full flex items-center">
+              <div className="relative w-full flex items-center bg-slate-950 border border-slate-800 rounded-xl focus-within:border-blue-500/50 transition-colors pl-5 overflow-hidden">
                 <input 
                   type="text" 
-                  readOnly
-                  value={emailAddress}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-5 py-4 text-white font-mono text-lg md:text-xl focus:outline-none focus:border-blue-500/50 transition-colors"
+                  value={emailPrefix}
+                  onChange={(e) => applyNewEmail(e.target.value)}
+                  placeholder="ketik_nama_bebas"
+                  className="w-full bg-transparent py-4 text-white font-mono text-lg md:text-xl focus:outline-none placeholder-slate-600"
                 />
+                <span className="text-slate-500 font-mono text-lg md:text-xl pr-5 py-4 shrink-0 select-none bg-slate-900/30 border-l border-slate-800 ml-2">
+                  @{domain}
+                </span>
               </div>
               <button 
                 onClick={copyToClipboard}
@@ -154,10 +171,13 @@ export default function TempMail() {
               </button>
 
               <button 
-                onClick={fetchEmails}
+                onClick={() => {
+                  fetchEmails();
+                  setCountdown(10);
+                }}
                 className="bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium rounded-xl px-4 py-3.5 transition-all text-sm flex items-center justify-center gap-2 border border-slate-700 hover:border-slate-600"
               >
-                <RefreshCcw className={`w-4 h-4 text-blue-400 ${loading ? 'animate-spin' : ''}`} /> Refresh (10s)
+                <RefreshCcw className={`w-4 h-4 text-blue-400 ${loading ? 'animate-spin' : ''}`} /> Refresh ({countdown}s)
               </button>
             </div>
           </div>
