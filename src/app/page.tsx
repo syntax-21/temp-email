@@ -357,16 +357,49 @@ export default function TempMail() {
             </div>
           </div>
         ) : (
-          <div className="flex-1 flex flex-col items-center justify-center text-gray-500 space-y-8 p-8 relative">
-            <div className="relative w-64 h-64 flex items-center justify-center">
+          <div className="flex-1 flex flex-col items-center justify-center text-gray-500 p-8 relative overflow-y-auto">
+            <div className="relative w-48 h-48 lg:w-64 lg:h-64 flex items-center justify-center shrink-0">
               <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/10 to-purple-600/10 rounded-full blur-3xl"></div>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="0.5" className="w-32 h-32 text-indigo-500/30 drop-shadow-[0_0_15px_rgba(99,102,241,0.2)]">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="0.5" className="w-24 h-24 lg:w-32 lg:h-32 text-indigo-500/30 drop-shadow-[0_0_15px_rgba(99,102,241,0.2)]">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" />
               </svg>
             </div>
-            <div className="text-center space-y-2 relative z-10">
-              <p className="text-xl font-semibold text-gray-300">Your Inbox is Ready</p>
-              <p className="text-sm text-gray-500">Select a message from the sidebar to view its contents.</p>
+            
+            <div className="text-center space-y-4 relative z-10 mb-10 shrink-0 max-w-2xl px-4">
+              <h2 className="text-2xl font-bold text-gray-200">Selamat Datang di TMail</h2>
+              <p className="text-sm text-gray-400 leading-relaxed">
+                TMail (Temporary Mail) adalah layanan penyedia alamat email sementara gratis. 
+                Gunakan alamat email di sebelah kiri untuk mendaftar ke situs web, forum, atau aplikasi 
+                yang tidak Anda percayai guna menjaga kotak masuk utama Anda tetap bersih dari pesan spam.
+              </p>
+              <p className="text-xs text-gray-500 pt-2 font-medium">👈 Pilih pesan di sebelah kiri untuk mulai membaca.</p>
+            </div>
+
+            {/* Features / Functions Section */}
+            <div className="relative z-10 w-full max-w-2xl grid grid-cols-1 md:grid-cols-3 gap-4 shrink-0 pb-8 mt-2">
+              <div className="bg-white/[0.02] border border-white/[0.05] rounded-2xl p-5 text-left hover:bg-white/[0.04] transition-colors">
+                <div className="w-10 h-10 rounded-xl bg-indigo-500/10 flex items-center justify-center mb-3">
+                  <span className="text-xl">🛡️</span>
+                </div>
+                <h3 className="text-sm font-semibold text-gray-300 mb-1.5">Anti Spam</h3>
+                <p className="text-xs text-gray-500 leading-relaxed">Lindungi email utama Anda dari promosi, spam, dan ancaman phising di internet.</p>
+              </div>
+
+              <div className="bg-white/[0.02] border border-white/[0.05] rounded-2xl p-5 text-left hover:bg-white/[0.04] transition-colors">
+                <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center mb-3">
+                  <span className="text-xl">⚡</span>
+                </div>
+                <h3 className="text-sm font-semibold text-gray-300 mb-1.5">Instan & Anonim</h3>
+                <p className="text-xs text-gray-500 leading-relaxed">Tanpa perlu daftar, tanpa password. Sekali klik, alamat email langsung bisa dipakai.</p>
+              </div>
+
+              <div className="bg-white/[0.02] border border-white/[0.05] rounded-2xl p-5 text-left hover:bg-white/[0.04] transition-colors">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center mb-3">
+                  <span className="text-xl">🔒</span>
+                </div>
+                <h3 className="text-sm font-semibold text-gray-300 mb-1.5">Privasi Terjaga</h3>
+                <p className="text-xs text-gray-500 leading-relaxed">Pesan yang masuk bersifat sementara. Kami tidak melacak data pribadi Anda.</p>
+              </div>
             </div>
           </div>
         )}
