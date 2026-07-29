@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Mail, RefreshCcw, Copy, Inbox, Sparkles, ChevronLeft, Shield, Zap, Lock } from 'lucide-react';
+import { Mail, RefreshCcw, Copy, Inbox, Sparkles, ChevronLeft, Shield, Zap, Lock, QrCode, X } from 'lucide-react';
 import { HUMAN_NAMES } from '../utils/names';
 
 export default function TempMail() {
@@ -12,10 +12,22 @@ export default function TempMail() {
   const [copied, setCopied] = useState(false);
   const [selectedEmailId, setSelectedEmailId] = useState<string | null>(null);
   const [countdown, setCountdown] = useState(10);
+  const [showQrModal, setShowQrModal] = useState(false);
 
   const domain = 'brepremiumstore.store';
 
   useEffect(() => {
+    // Check for email in URL query parameters first (e.g. from QR scan)
+    const params = new URLSearchParams(window.location.search);
+    const emailParam = params.get('email');
+    
+    if (emailParam) {
+      applyNewEmail(emailParam);
+      // Clean up the URL without refreshing the page
+      window.history.replaceState({}, '', '/');
+      return;
+    }
+
     const savedEmail = localStorage.getItem('temp_email');
     if (savedEmail && savedEmail.endsWith(`@${domain}`)) {
       setEmailAddress(savedEmail);
@@ -133,12 +145,21 @@ export default function TempMail() {
                   @{domain}
                 </span>
               </div>
-              <button 
-                onClick={copyToClipboard}
-                className="w-full sm:w-auto flex-shrink-0 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl px-8 py-4 transition-all shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2"
-              >
-                {copied ? <span className="text-white">Tersalin! ✓</span> : <><Copy className="w-5 h-5" /> Copy</>}
-              </button>
+              <div className="flex gap-2 w-full sm:w-auto flex-shrink-0">
+                <button 
+                  onClick={copyToClipboard}
+                  className="flex-1 sm:flex-none bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl px-6 py-4 transition-all shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2"
+                >
+                  {copied ? <span className="text-white">Tersalin!</span> : <><Copy className="w-5 h-5" /> Copy</>}
+                </button>
+                <button 
+                  onClick={() => setShowQrModal(true)}
+                  className="bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl px-4 py-4 transition-all border border-slate-700 hover:border-slate-500 flex items-center justify-center"
+                  title="Tampilkan QR Code"
+                >
+                  <QrCode className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             {/* Action Buttons */}
@@ -317,6 +338,43 @@ export default function TempMail() {
       <footer className="w-full border-t border-slate-800/60 bg-[#030712] py-8 text-center">
         <p className="text-slate-500 text-sm">Copyright © 2026 TMail. All rights reserved.</p>
       </footer>
+
+      {/* QR CODE MODAL */}
+      {showQrModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-[#111827] border border-slate-700 rounded-2xl shadow-2xl overflow-hidden max-w-sm w-full relative">
+            <button 
+              onClick={() => setShowQrModal(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 p-1.5 rounded-lg transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            
+            <div className="p-8 flex flex-col items-center text-center">
+              <QrCode className="w-10 h-10 text-blue-500 mb-4" />
+              <h3 className="text-xl font-bold text-white mb-2">Akses Kembali Email Ini</h3>
+              <p className="text-slate-400 text-sm mb-6">
+                Pindai QR code ini di perangkat lain untuk membuka kotak masuk <span className="text-blue-400 font-medium">{emailAddress}</span>
+              </p>
+              
+              <div className="bg-white p-4 rounded-xl shadow-inner mb-6">
+                <img 
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`https://www.brepremiumstore.store/?email=${emailPrefix}`)}`} 
+                  alt="QR Code" 
+                  className="w-48 h-48 object-contain"
+                />
+              </div>
+              
+              <button 
+                onClick={() => setShowQrModal(false)}
+                className="w-full bg-slate-800 hover:bg-slate-700 text-white font-medium py-3 rounded-xl transition-colors"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
