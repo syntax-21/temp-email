@@ -128,7 +128,7 @@ export default function TempMail() {
         
         // Notification logic
         if (!initialLoadRef.current && data.emails.length > prevEmailCountRef.current) {
-          playNotificationSound();
+          playNotificationSound(lang);
           if ('Notification' in window && Notification.permission === 'granted') {
             new Notification('TMail', {
               body: 'Ada pesan masuk!',
