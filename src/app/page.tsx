@@ -201,13 +201,13 @@ export default function TempMail() {
       <main className="max-w-6xl mx-auto px-4 md:px-6 py-12 flex flex-col items-center">
         
         {/* HERO SECTION */}
-        <div className="w-full max-w-3xl flex flex-col items-center text-center mb-12">
-          <h2 className="text-3xl md:text-4xl font-extrabold text-white mb-4 tracking-tight">{t(lang, 'welcomeTitle')}</h2>
-          <p className="text-slate-400 text-sm md:text-base leading-relaxed mb-10 max-w-2xl">
+        <div className="w-full flex flex-col items-center text-center mb-12">
+          <h2 className="text-3xl md:text-5xl font-extrabold text-white mb-4 tracking-tight">{t(lang, 'welcomeTitle')}</h2>
+          <p className="text-slate-400 text-sm md:text-base leading-relaxed mb-10 max-w-3xl">
             {t(lang, 'welcomeDesc')}
           </p>
 
-          <div className="w-full bg-slate-900/50 border border-blue-500/30 rounded-2xl p-4 md:p-6 shadow-[0_0_40px_-10px_rgba(59,130,246,0.15)] relative overflow-visible backdrop-blur-xl z-20">
+          <div className="w-full bg-slate-900/50 border border-blue-500/30 rounded-2xl p-6 md:p-8 shadow-[0_0_40px_-10px_rgba(59,130,246,0.15)] relative overflow-visible backdrop-blur-xl z-20">
             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-500 to-cyan-500"></div>
             
             <div className="flex justify-between items-center mb-3">
