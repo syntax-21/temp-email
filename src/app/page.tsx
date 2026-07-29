@@ -2,27 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { Mail, RefreshCcw, Copy, Inbox, Sparkles, ChevronLeft, Shield, Zap, Lock } from 'lucide-react';
-
-const HUMAN_NAMES = [
-  "alex", "jordan", "taylor", "morgan", "casey", "riley", "cameron", "avery", "quinn", "skyler", 
-  "ryan", "dylan", "logan", "lucas", "liam", "emma", "olivia", "ava", "sophia", "isabella", 
-  "mia", "charlotte", "amelia", "harper", "evelyn", "abigail", "emily", "elizabeth", "sofia", "ella", 
-  "madison", "scarlett", "victoria", "aria", "grace", "chloe", "camila", "penelope", "layla", "lillian", 
-  "nora", "zoey", "mila", "aubrey", "hannah", "addison", "eleanor", "natalie", "luna", "savannah", 
-  "brooklyn", "leah", "zoe", "stella", "hazel", "ellie", "paisley", "audrey", "skylar", "violet", 
-  "claire", "bella", "aurora", "lucy", "anna", "samantha", "caroline", "genesis", "aaliyah", "kennedy", 
-  "kinsley", "allison", "maya", "sarah", "madelyn", "adeline", "alexa", "ariana", "elena", "gabriella", 
-  "naomi", "alice", "sadie", "hailey", "eva", "emilia", "autumn", "nevaeh", "piper", "ruby", 
-  "serenity", "willow", "everly", "cora", "kaylee", "lydia", "aubree", "ariel", "oliver", "elijah", 
-  "william", "james", "benjamin", "henry", "alexander", "michael", "daniel", "matthew", "jackson", "sebastian", 
-  "jack", "john", "luke", "wyatt", "levi", "isaac", "gabriel", "julian", "mateo", "anthony", 
-  "jaxon", "lincoln", "joshua", "christopher", "andrew", "theodore", "caleb", "asher", "nathan", "thomas", 
-  "leo", "isaiah", "charles", "josiah", "hudson", "christian", "hunter", "connor", "eli", "ezra", 
-  "aaron", "landon", "adrian", "jonathan", "nolan", "jeremiah", "easton", "elias", "colton", "carson", 
-  "robert", "angel", "maverick", "nicholas", "dominic", "jaxson", "greyson", "adam", "ian", "austin", 
-  "santiago", "cooper", "brayden", "roman", "evan", "ezekiel", "xavier", "jose", "jace", "jameson", 
-  "leonardo", "bryson", "axel", "everett", "parker", "kayden", "miles", "sawyer", "jason"
-];
+import { HUMAN_NAMES } from '../utils/names';
 
 export default function TempMail() {
   const [emailPrefix, setEmailPrefix] = useState('');
