@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Mail, RefreshCcw, Copy, Inbox, Sparkles, ChevronLeft, Shield, Zap, Lock, QrCode, X, History, Globe, AlertTriangle, Key } from 'lucide-react';
+import { Mail, RefreshCcw, Copy, Inbox, Sparkles, ChevronLeft, Shield, Zap, Lock, QrCode, X, Globe, AlertTriangle, Key } from 'lucide-react';
 import { HUMAN_NAMES } from '../utils/names';
 import { t, Language } from '../utils/translations';
 import { playNotificationSound } from '../utils/audio';
@@ -19,10 +19,6 @@ export default function TempMail() {
   
   // Modals & Overlays
   const [showQrModal, setShowQrModal] = useState(false);
-  const [showHistory, setShowHistory] = useState(false);
-  
-  // History state
-  const [emailHistory, setEmailHistory] = useState<string[]>([]);
   
   // Security / PIN state
   const [pin, setPin] = useState('');
@@ -46,9 +42,6 @@ export default function TempMail() {
 
   // Check URL & LocalStorage on mount
   useEffect(() => {
-    const savedHistory = JSON.parse(localStorage.getItem('tmail_history') || '[]');
-    setEmailHistory(savedHistory);
-
     const params = new URLSearchParams(window.location.search);
     const emailParam = params.get('email');
     
@@ -88,13 +81,6 @@ export default function TempMail() {
     return () => clearInterval(timer);
   }, [emailAddress]);
 
-  const addToHistory = (email: string) => {
-    const saved = JSON.parse(localStorage.getItem('tmail_history') || '[]');
-    const updated = [email, ...saved.filter((e: string) => e !== email)].slice(0, 5);
-    localStorage.setItem('tmail_history', JSON.stringify(updated));
-    setEmailHistory(updated);
-  };
-
   const checkPinStatus = (email: string) => {
     const savedPin = localStorage.getItem(`tmail_pin_${email}`);
     if (savedPin) {
@@ -128,7 +114,6 @@ export default function TempMail() {
     prevEmailCountRef.current = 0;
     initialLoadRef.current = true;
     
-    addToHistory(newEmail);
     checkPinStatus(newEmail);
   };
 
@@ -146,7 +131,7 @@ export default function TempMail() {
           playNotificationSound();
           if ('Notification' in window && Notification.permission === 'granted') {
             new Notification('TMail', {
-              body: 'Anda mendapat email baru!',
+              body: 'Ada pesan masuk!',
               icon: '/icon.svg'
             });
           }
@@ -228,7 +213,7 @@ export default function TempMail() {
             <div className="flex justify-between items-center mb-3">
               <p className="text-xs font-bold text-blue-400 uppercase tracking-widest">{t(lang, 'yourEmail')}</p>
               
-              {/* History Dropdown & Lock */}
+              {/* Lock */}
               <div className="flex gap-2 relative">
                 {!pin && (
                   <button onClick={() => setShowPinSetup(!showPinSetup)} className="text-slate-400 hover:text-emerald-400 transition-colors flex items-center gap-1 text-xs font-semibold bg-slate-800 px-2 py-1 rounded">
@@ -240,21 +225,6 @@ export default function TempMail() {
                     <Lock className="w-3.5 h-3.5" /> Locked
                   </span>
                 )}
-                
-                <div className="relative">
-                  <button onClick={() => setShowHistory(!showHistory)} className="text-slate-400 hover:text-blue-400 transition-colors flex items-center gap-1 text-xs font-semibold bg-slate-800 px-2 py-1 rounded">
-                    <History className="w-3.5 h-3.5" /> {t(lang, 'history')}
-                  </button>
-                  {showHistory && (
-                    <div className="absolute right-0 top-full mt-2 w-56 bg-slate-800 border border-slate-700 rounded-xl shadow-xl overflow-hidden z-50">
-                      {emailHistory.map((h, i) => (
-                        <button key={i} onClick={() => { applyNewEmail(h.split('@')[0]); setShowHistory(false); }} className="w-full text-left px-4 py-2 text-sm text-slate-300 hover:bg-slate-700 border-b border-slate-700/50 truncate">
-                          {h}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
               </div>
             </div>
 
