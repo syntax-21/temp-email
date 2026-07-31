@@ -27,7 +27,8 @@ export const translations = {
     pinSaved: "PIN Tersimpan!",
     wrongPin: "PIN Salah!",
     unlock: "Buka",
-    lockedDesc: "Kotak masuk ini dilindungi oleh PIN. Masukkan PIN yang benar untuk melihat isi pesan."
+    lockedDesc: "Kotak masuk ini dilindungi oleh PIN. Masukkan PIN yang benar untuk melihat isi pesan.",
+    blockedDomain: "Nama ini dilarang digunakan."
   },
   en: {
     welcomeTitle: "Welcome to TMail",
@@ -55,7 +56,8 @@ export const translations = {
     pinSaved: "PIN Saved!",
     wrongPin: "Wrong PIN!",
     unlock: "Unlock",
-    lockedDesc: "This inbox is protected by a PIN. Enter the correct PIN to view your messages."
+    lockedDesc: "This inbox is protected by a PIN. Enter the correct PIN to view your messages.",
+    blockedDomain: "This name is reserved and cannot be used."
   }
 };
 
