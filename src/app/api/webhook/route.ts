@@ -26,6 +26,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Address is banned' }, { status: 403 });
     }
 
+    // Cek apakah email tujuan menggunakan reserved name (Misal prefix 'admin')
+    const prefix = emailTo.split('@')[0];
+    const isReserved = await kv.sismember('reserved_names', prefix);
+    if (isReserved) {
+      console.log(`Email ditolak (Reserved Name): ${emailTo}`);
+      return NextResponse.json({ error: 'Address is reserved' }, { status: 403 });
+    }
+
     // Parse email mentah menggunakan postal-mime
     let parsedEmail: any = {};
     try {
@@ -52,8 +60,26 @@ export async function POST(request: Request) {
     await kv.lpush(`inbox:${emailTo}`, newEmail);
     // Batasi maksimum 50 email per alamat agar penyimpanan tidak membengkak
     await kv.ltrim(`inbox:${emailTo}`, 0, 49);
-    // Set expiry (pesan dihapus otomatis setelah 24 jam)
-    await kv.expire(`inbox:${emailTo}`, 86400);
+    
+    // Ambil setting expiry (default 86400 detik = 24 jam)
+    const expirySetting = await kv.get('settings:expiry');
+    const expiryTime = typeof expirySetting === 'number' ? expirySetting : 86400;
+    
+    // Set expiry
+    await kv.expire(`inbox:${emailTo}`, expiryTime);
+
+    // Update Statistik
+    await kv.incr('stats:emails_received');
+
+    // Catat ke System Logs
+    const logEntry = {
+      id: Date.now().toString(),
+      type: 'webhook_received',
+      message: `Pesan baru diterima untuk ${emailTo}`,
+      timestamp: new Date().toISOString()
+    };
+    await kv.lpush('system_logs', logEntry);
+    await kv.ltrim('system_logs', 0, 99); // Simpan 100 log terakhir
 
     return NextResponse.json({ success: true, message: 'Email berhasil disimpan ke KV' });
   } catch (error) {

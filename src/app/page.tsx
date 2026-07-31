@@ -32,7 +32,8 @@ export default function TempMail() {
   const initialLoadRef = useRef<boolean>(true);
 
   const [domain, setDomain] = useState('brepremiumstore.my.id');
-  const AVAILABLE_DOMAINS = ['brepremiumstore.my.id', 'brepremiumstore.store'];
+  const [availableDomains, setAvailableDomains] = useState<string[]>(['brepremiumstore.my.id', 'brepremiumstore.store']);
+  const [reservedNames, setReservedNames] = useState<string[]>([]);
 
   // Ask for notification permission
   useEffect(() => {
@@ -55,15 +56,29 @@ export default function TempMail() {
     const savedEmail = localStorage.getItem('temp_email');
     if (savedEmail && savedEmail.includes('@')) {
       const parts = savedEmail.split('@');
-      if (AVAILABLE_DOMAINS.includes(parts[1])) {
-        setEmailAddress(savedEmail);
-        setEmailPrefix(parts[0]);
-        setDomain(parts[1]);
-        checkPinStatus(savedEmail);
-        return;
-      }
+      // We'll validate the domain after fetching settings, but pre-fill for now
+      setEmailAddress(savedEmail);
+      setEmailPrefix(parts[0]);
+      setDomain(parts[1]);
+      checkPinStatus(savedEmail);
+    } else {
+      generateRandomEmail();
     }
-    generateRandomEmail();
+
+    // Fetch Enterprise Settings
+    fetch('/api/settings')
+      .then(res => res.json())
+      .then(data => {
+        if (data.domains && data.domains.length > 0) {
+          setAvailableDomains(data.domains);
+          // Auto-select first domain if current domain is not in list
+          setDomain(prev => data.domains.includes(prev) ? prev : data.domains[0]);
+        }
+        if (data.reservedNames) {
+          setReservedNames(data.reservedNames);
+        }
+      })
+      .catch(err => console.error('Failed to load settings', err));
   }, []);
 
   // Main Interval
@@ -109,6 +124,13 @@ export default function TempMail() {
   const applyNewEmail = (prefix: string, overrideDomain?: string) => {
     if (!prefix) return;
     const cleanPrefix = prefix.toLowerCase().replace(/[^a-z0-9.-]/g, '');
+    
+    if (reservedNames.includes(cleanPrefix)) {
+      alert(t(lang, 'blockedDomain') || 'Nama ini dilarang digunakan.');
+      generateRandomEmail();
+      return;
+    }
+
     const activeDomain = overrideDomain || domain;
     const newEmail = `${cleanPrefix}@${activeDomain}`;
     
@@ -248,22 +270,22 @@ export default function TempMail() {
             )}
             
             <div className="flex flex-col sm:flex-row items-center gap-3 w-full relative z-10">
-              <div className="relative w-full flex items-center bg-slate-950 border border-slate-800 rounded-xl focus-within:border-blue-500/50 transition-colors pl-5 overflow-hidden">
+              <div className="relative w-full flex flex-col md:flex-row items-stretch bg-slate-950 border border-slate-800 rounded-xl focus-within:border-blue-500/50 transition-colors overflow-hidden">
                 <input 
                   type="text" 
                   value={emailPrefix}
                   onChange={(e) => applyNewEmail(e.target.value)}
                   placeholder={t(lang, 'typeCustomName')}
-                  className="w-full bg-transparent py-4 text-white font-mono text-lg md:text-xl focus:outline-none placeholder-slate-600"
+                  className="w-full md:flex-1 bg-transparent py-3 md:py-4 px-5 text-white font-mono text-base md:text-xl focus:outline-none placeholder-slate-600 text-center md:text-left"
                 />
-                <div className="relative flex items-center bg-slate-900/30 border-l border-slate-800 h-full ml-2">
-                  <span className="text-slate-500 font-mono text-lg md:text-xl pl-4 pr-1">@</span>
+                <div className="relative flex items-center justify-center bg-slate-900/50 border-t md:border-t-0 md:border-l border-slate-800">
+                  <span className="text-slate-500 font-mono text-sm md:text-xl pl-4 pr-1">@</span>
                   <select
                     value={domain}
                     onChange={(e) => handleDomainChange(e.target.value)}
-                    className="bg-transparent text-slate-400 hover:text-white font-mono text-lg md:text-xl pr-10 py-4 focus:outline-none cursor-pointer appearance-none transition-colors"
+                    className="bg-transparent text-slate-400 hover:text-white font-mono text-sm md:text-xl pr-10 py-3 md:py-4 focus:outline-none cursor-pointer appearance-none transition-colors"
                   >
-                    {AVAILABLE_DOMAINS.map(d => (
+                    {availableDomains.map(d => (
                       <option key={d} value={d} className="bg-slate-900 text-white">{d}</option>
                     ))}
                   </select>

@@ -10,6 +10,13 @@ const kv = createClient({
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
+  // Cek IP Address
+  const ip = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
+  const isBannedIp = await kv.sismember('banned_ips', ip);
+  if (isBannedIp) {
+    return NextResponse.json({ error: 'Akses Ditolak (Banned IP)' }, { status: 403 });
+  }
+
   const { searchParams } = new URL(request.url);
   const address = searchParams.get('address');
 
@@ -20,6 +27,13 @@ export async function GET(request: Request) {
   try {
     const emailTo = address.toLowerCase();
     
+    // Cek Reserved Names
+    const prefix = emailTo.split('@')[0];
+    const isReserved = await kv.sismember('reserved_names', prefix);
+    if (isReserved) {
+      return NextResponse.json({ error: 'Nama email ini dilarang digunakan (Reserved)' }, { status: 403 });
+    }
+
     // Mengambil seluruh isi inbox dari Vercel KV
     const emails = await kv.lrange(`inbox:${emailTo}`, 0, -1);
     

@@ -22,32 +22,46 @@ export async function GET(request: Request) {
     if (authError) return NextResponse.json({ error: authError.error }, { status: authError.status });
 
     const keys = await kv.keys('inbox:*');
-    
-    // Ambil daftar email yang diblokir
     const bannedEmails = await kv.smembers('banned_emails') || [];
+    
+    // Enterprise Features Data
+    const customDomains = await kv.smembers('domains') || [];
+    const reservedNames = await kv.smembers('reserved_names') || [];
+    const bannedIps = await kv.smembers('banned_ips') || [];
+    
+    const expirySetting = await kv.get('settings:expiry');
+    const expiryTime = typeof expirySetting === 'number' ? expirySetting : 86400;
+    
+    const emailsReceived = await kv.get('stats:emails_received') || 0;
+    
+    const systemLogs = await kv.lrange('system_logs', 0, 99) || [];
 
-    if (!keys || keys.length === 0) {
-      return NextResponse.json({ inboxes: [], bannedEmails });
+    let inboxes: any[] = [];
+    if (keys && keys.length > 0) {
+      inboxes = await Promise.all(
+        keys.map(async (key) => {
+          const address = key.replace('inbox:', '');
+          const emails = await kv.lrange(key, 0, -1) || [];
+          return {
+            address,
+            count: emails.length,
+            emails: emails
+          };
+        })
+      );
+      inboxes.sort((a, b) => b.count - a.count);
     }
 
-    const inboxes = await Promise.all(
-      keys.map(async (key) => {
-        const address = key.replace('inbox:', '');
-        const emails = await kv.lrange(key, 0, -1) || [];
-        return {
-          address,
-          count: emails.length,
-          emails: emails
-        };
-      })
-    );
-
-    inboxes.sort((a, b) => b.count - a.count);
-
     return NextResponse.json({ 
-      totalActiveInboxes: keys.length,
+      totalActiveInboxes: keys.length || 0,
       inboxes,
-      bannedEmails
+      bannedEmails,
+      domains: customDomains,
+      reservedNames,
+      bannedIps,
+      settings: { expiry: expiryTime },
+      stats: { emailsReceived },
+      systemLogs
     });
 
   } catch (error) {
@@ -56,7 +70,6 @@ export async function GET(request: Request) {
   }
 }
 
-// DELETE: Untuk menghapus semua email di satu inbox
 export async function DELETE(request: Request) {
   try {
     const authError = verifyAuth(request);
@@ -64,7 +77,27 @@ export async function DELETE(request: Request) {
 
     const { searchParams } = new URL(request.url);
     const address = searchParams.get('address');
+    const type = searchParams.get('type');
 
+    // Master Reset (Hapus Semua)
+    if (type === 'all_inboxes') {
+      const keys = await kv.keys('inbox:*');
+      if (keys && keys.length > 0) {
+        // kv.del takes multiple keys
+        await kv.del(...keys);
+      }
+      // Catat log
+      const logEntry = {
+        id: Date.now().toString(),
+        type: 'master_reset',
+        message: `Admin melakukan Master Reset (${keys.length} inbox dihapus)`,
+        timestamp: new Date().toISOString()
+      };
+      await kv.lpush('system_logs', logEntry);
+      return NextResponse.json({ success: true, message: `Berhasil menghapus ${keys.length} kotak masuk.` });
+    }
+
+    // Hapus Single Inbox
     if (!address) return NextResponse.json({ error: 'Address required' }, { status: 400 });
 
     await kv.del(`inbox:${address}`);
@@ -75,28 +108,56 @@ export async function DELETE(request: Request) {
   }
 }
 
-// POST: Untuk blokir / unblokir alamat email
 export async function POST(request: Request) {
   try {
     const authError = verifyAuth(request);
     if (authError) return NextResponse.json({ error: authError.error }, { status: authError.status });
 
     const data = await request.json();
-    const { address, action } = data;
+    const { action, value } = data; // generic payload for new actions
+    const address = data.address; // old payload backward compatibility
 
-    if (!address || !action) return NextResponse.json({ error: 'Address and action required' }, { status: 400 });
+    if (!action) return NextResponse.json({ error: 'Action required' }, { status: 400 });
 
-    if (action === 'ban') {
+    // Old ban actions
+    if (action === 'ban' && address) {
       await kv.sadd('banned_emails', address);
-      // Optional: Delete existing inbox when banned
       await kv.del(`inbox:${address}`);
       return NextResponse.json({ success: true, message: `${address} banned` });
-    } else if (action === 'unban') {
+    } else if (action === 'unban' && address) {
       await kv.srem('banned_emails', address);
       return NextResponse.json({ success: true, message: `${address} unbanned` });
     }
 
-    return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
+    // New actions
+    switch (action) {
+      case 'save_settings':
+        if (value && typeof value.expiry === 'number') {
+          await kv.set('settings:expiry', value.expiry);
+          return NextResponse.json({ success: true });
+        }
+        break;
+      case 'add_domain':
+        if (value) await kv.sadd('domains', value);
+        return NextResponse.json({ success: true });
+      case 'remove_domain':
+        if (value) await kv.srem('domains', value);
+        return NextResponse.json({ success: true });
+      case 'add_reserved':
+        if (value) await kv.sadd('reserved_names', value);
+        return NextResponse.json({ success: true });
+      case 'remove_reserved':
+        if (value) await kv.srem('reserved_names', value);
+        return NextResponse.json({ success: true });
+      case 'ban_ip':
+        if (value) await kv.sadd('banned_ips', value);
+        return NextResponse.json({ success: true });
+      case 'unban_ip':
+        if (value) await kv.srem('banned_ips', value);
+        return NextResponse.json({ success: true });
+    }
+
+    return NextResponse.json({ error: 'Invalid action or missing parameters' }, { status: 400 });
   } catch (error) {
     console.error('Admin POST error:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
