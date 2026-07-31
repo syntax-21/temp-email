@@ -19,6 +19,13 @@ export async function POST(request: Request) {
     // Ekstrak alamat tujuan dengan huruf kecil semua (contoh: User@brepremiumstore.store -> user@brepremiumstore.store)
     const emailTo = tujuan.toLowerCase();
     
+    // Cek apakah alamat ini diblokir (banned)
+    const isBanned = await kv.sismember('banned_emails', emailTo);
+    if (isBanned) {
+      console.log(`Email ditolak (Banned): ${emailTo}`);
+      return NextResponse.json({ error: 'Address is banned' }, { status: 403 });
+    }
+
     // Parse email mentah menggunakan postal-mime
     let parsedEmail: any = {};
     try {
