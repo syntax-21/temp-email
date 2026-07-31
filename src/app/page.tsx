@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Mail, RefreshCcw, Copy, Inbox, Sparkles, ChevronLeft, Shield, Zap, Lock, QrCode, X, Globe, AlertTriangle, Key } from 'lucide-react';
+import { Mail, RefreshCcw, Copy, Inbox, Sparkles, ChevronLeft, ChevronDown, Shield, Zap, Lock, QrCode, X, Globe, AlertTriangle, Key } from 'lucide-react';
 import { HUMAN_NAMES } from '../utils/names';
 import { t, Language } from '../utils/translations';
 import { playNotificationSound } from '../utils/audio';
