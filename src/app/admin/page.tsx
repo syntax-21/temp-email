@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Lock, Mail, Activity, Eye, ChevronDown, ChevronUp, ShieldAlert, LogOut, RefreshCcw, Search } from 'lucide-react';
+import { Lock, Mail, Activity, Eye, ChevronDown, ChevronUp, ShieldAlert, LogOut, RefreshCcw, Search, Inbox } from 'lucide-react';
 
 export default function AdminDashboard() {
   const [password, setPassword] = useState('');

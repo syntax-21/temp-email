@@ -31,7 +31,8 @@ export default function TempMail() {
   const prevEmailCountRef = useRef<number>(0);
   const initialLoadRef = useRef<boolean>(true);
 
-  const domain = 'brepremiumstore.store';
+  const [domain, setDomain] = useState('brepremiumstore.my.id');
+  const AVAILABLE_DOMAINS = ['brepremiumstore.my.id', 'brepremiumstore.store'];
 
   // Ask for notification permission
   useEffect(() => {
@@ -52,13 +53,17 @@ export default function TempMail() {
     }
 
     const savedEmail = localStorage.getItem('temp_email');
-    if (savedEmail && savedEmail.endsWith(`@${domain}`)) {
-      setEmailAddress(savedEmail);
-      setEmailPrefix(savedEmail.split('@')[0]);
-      checkPinStatus(savedEmail);
-    } else {
-      generateRandomEmail();
+    if (savedEmail && savedEmail.includes('@')) {
+      const parts = savedEmail.split('@');
+      if (AVAILABLE_DOMAINS.includes(parts[1])) {
+        setEmailAddress(savedEmail);
+        setEmailPrefix(parts[0]);
+        setDomain(parts[1]);
+        checkPinStatus(savedEmail);
+        return;
+      }
     }
+    generateRandomEmail();
   }, []);
 
   // Main Interval
@@ -101,12 +106,14 @@ export default function TempMail() {
     applyNewEmail(`${randomName}${randomNumber}`);
   };
 
-  const applyNewEmail = (prefix: string) => {
+  const applyNewEmail = (prefix: string, overrideDomain?: string) => {
     if (!prefix) return;
     const cleanPrefix = prefix.toLowerCase().replace(/[^a-z0-9.-]/g, '');
-    const newEmail = `${cleanPrefix}@${domain}`;
+    const activeDomain = overrideDomain || domain;
+    const newEmail = `${cleanPrefix}@${activeDomain}`;
     
     setEmailPrefix(cleanPrefix);
+    if (overrideDomain) setDomain(overrideDomain);
     setEmailAddress(newEmail);
     localStorage.setItem('temp_email', newEmail);
     setEmails([]);
@@ -115,6 +122,10 @@ export default function TempMail() {
     initialLoadRef.current = true;
     
     checkPinStatus(newEmail);
+  };
+
+  const handleDomainChange = (newDomain: string) => {
+    applyNewEmail(emailPrefix || 'user', newDomain);
   };
 
   const fetchEmails = async () => {
@@ -245,9 +256,19 @@ export default function TempMail() {
                   placeholder={t(lang, 'typeCustomName')}
                   className="w-full bg-transparent py-4 text-white font-mono text-lg md:text-xl focus:outline-none placeholder-slate-600"
                 />
-                <span className="text-slate-500 font-mono text-lg md:text-xl pr-5 py-4 shrink-0 select-none bg-slate-900/30 border-l border-slate-800 ml-2">
-                  @{domain}
-                </span>
+                <div className="relative flex items-center bg-slate-900/30 border-l border-slate-800 h-full ml-2">
+                  <span className="text-slate-500 font-mono text-lg md:text-xl pl-4 pr-1">@</span>
+                  <select
+                    value={domain}
+                    onChange={(e) => handleDomainChange(e.target.value)}
+                    className="bg-transparent text-slate-400 hover:text-white font-mono text-lg md:text-xl pr-10 py-4 focus:outline-none cursor-pointer appearance-none transition-colors"
+                  >
+                    {AVAILABLE_DOMAINS.map(d => (
+                      <option key={d} value={d} className="bg-slate-900 text-white">{d}</option>
+                    ))}
+                  </select>
+                  <ChevronDown className="w-4 h-4 text-slate-500 absolute right-4 pointer-events-none" />
+                </div>
               </div>
               <div className="flex gap-2 w-full sm:w-auto flex-shrink-0">
                 <button onClick={copyToClipboard} className="flex-1 sm:flex-none bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl px-6 py-4 transition-all shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2">
@@ -409,7 +430,7 @@ export default function TempMail() {
               <h3 className="text-xl font-bold text-white mb-2">{t(lang, 'accessQrTitle')}</h3>
               <p className="text-slate-400 text-sm mb-6">{t(lang, 'accessQrDesc')} <span className="text-blue-400 font-medium">{emailAddress}</span></p>
               <div className="bg-white p-4 rounded-xl shadow-inner mb-6">
-                <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`https://www.brepremiumstore.store/?email=${emailPrefix}`)}`} alt="QR Code" className="w-48 h-48 object-contain" />
+                <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`https://www.${domain}/?email=${emailPrefix}`)}`} alt="QR Code" className="w-48 h-48 object-contain" />
               </div>
               <button onClick={() => setShowQrModal(false)} className="w-full bg-slate-800 hover:bg-slate-700 text-white font-medium py-3 rounded-xl transition-colors">{t(lang, 'close')}</button>
             </div>
