@@ -10,11 +10,27 @@ const kv = createClient({
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
-  // Cek IP Address
   const ip = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
+
+  // Cek maintenance mode — tampilkan pesan khusus ke user
+  const maintenanceMode = await kv.get('settings:maintenance');
+  if (maintenanceMode) {
+    return NextResponse.json(
+      { error: 'Sistem sedang dalam maintenance. Coba lagi nanti.' },
+      { status: 503 }
+    );
+  }
+
+  // Cek banned IP permanen
   const isBannedIp = await kv.sismember('banned_ips', ip);
   if (isBannedIp) {
     return NextResponse.json({ error: 'Akses Ditolak (Banned IP)' }, { status: 403 });
+  }
+
+  // Cek temporary ban IP (key dengan TTL otomatis)
+  const isTempBanned = await kv.get(`banned_ips:temp:${ip}`);
+  if (isTempBanned) {
+    return NextResponse.json({ error: 'Akses Ditolak (Temporary Ban)' }, { status: 403 });
   }
 
   const { searchParams } = new URL(request.url);
@@ -26,7 +42,7 @@ export async function GET(request: Request) {
 
   try {
     const emailTo = address.toLowerCase();
-    
+
     // Cek Reserved Names
     const prefix = emailTo.split('@')[0];
     const isReserved = await kv.sismember('reserved_names', prefix);
@@ -36,7 +52,7 @@ export async function GET(request: Request) {
 
     // Mengambil seluruh isi inbox dari Vercel KV
     const emails = await kv.lrange(`inbox:${emailTo}`, 0, -1);
-    
+
     return NextResponse.json({ emails: emails || [] });
   } catch (error) {
     console.error('Get emails error:', error);

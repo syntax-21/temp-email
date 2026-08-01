@@ -16,9 +16,15 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Alamat tujuan tidak ditemukan' }, { status: 400 });
     }
 
-    // Ekstrak alamat tujuan dengan huruf kecil semua (contoh: User@brepremiumstore.store -> user@brepremiumstore.store)
+    // Cek maintenance mode — tolak semua email masuk saat maintenance
+    const maintenanceMode = await kv.get('settings:maintenance');
+    if (maintenanceMode) {
+      return NextResponse.json({ error: 'Sistem sedang dalam maintenance' }, { status: 503 });
+    }
+
     const emailTo = tujuan.toLowerCase();
-    
+    const domain = emailTo.split('@')[1] || '';
+
     // Cek apakah alamat ini diblokir (banned)
     const isBanned = await kv.sismember('banned_emails', emailTo);
     if (isBanned) {
@@ -26,7 +32,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Address is banned' }, { status: 403 });
     }
 
-    // Cek apakah email tujuan menggunakan reserved name (Misal prefix 'admin')
+    // Cek apakah email tujuan menggunakan reserved name
     const prefix = emailTo.split('@')[0];
     const isReserved = await kv.sismember('reserved_names', prefix);
     if (isReserved) {
@@ -43,43 +49,60 @@ export async function POST(request: Request) {
       console.error('Gagal parsing email', e);
     }
 
-    // Siapkan data email yang akan disimpan ke Vercel KV (Database)
+    const fromAddress = parsedEmail.from?.address || dari || 'Unknown Sender';
+    const subject = parsedEmail.subject || '(Tanpa Subjek)';
+
+    // Siapkan data email
     const newEmail = {
       id: Date.now().toString(),
-      from: parsedEmail.from?.address || dari || 'Unknown Sender',
+      from: fromAddress,
       fromName: parsedEmail.from?.name || '',
       to: emailTo,
-      subject: parsedEmail.subject || '(Tanpa Subjek)',
+      subject,
       text: parsedEmail.text || '',
       html: parsedEmail.html || '',
       rawBody: isi_email_mentah,
       receivedAt: new Date().toISOString()
     };
 
-    // Simpan email ke dalam list (inbox) berdasarkan alamat tujuannya
+    // Simpan email ke dalam list (inbox)
     await kv.lpush(`inbox:${emailTo}`, newEmail);
-    // Batasi maksimum 50 email per alamat agar penyimpanan tidak membengkak
+    // Batasi maksimum 50 email per alamat
     await kv.ltrim(`inbox:${emailTo}`, 0, 49);
-    
-    // Ambil setting expiry (default 86400 detik = 24 jam)
-    const expirySetting = await kv.get('settings:expiry');
-    const expiryTime = typeof expirySetting === 'number' ? expirySetting : 86400;
-    
-    // Set expiry
-    await kv.expire(`inbox:${emailTo}`, expiryTime);
 
-    // Update Statistik
+    // Cek whitelist email — email yang di-whitelist tidak pernah expire
+    const isWhitelisted = await kv.sismember('whitelist_emails', emailTo);
+    if (!isWhitelisted) {
+      // Cek expiry per-domain dulu, fallback ke global
+      const domainExpiry = await kv.get(`settings:expiry:${domain}`);
+      const globalExpiry = await kv.get('settings:expiry');
+      const expiryTime =
+        (typeof domainExpiry === 'number' ? domainExpiry : null) ??
+        (typeof globalExpiry === 'number' ? globalExpiry : 86400);
+      await kv.expire(`inbox:${emailTo}`, expiryTime as number);
+    }
+
+    // Update statistik global
     await kv.incr('stats:emails_received');
 
-    // Catat ke System Logs
+    // Update statistik harian (untuk grafik analytics)
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    await kv.incr(`stats:daily:${today}`);
+    await kv.expire(`stats:daily:${today}`, 60 * 60 * 24 * 30); // simpan 30 hari
+
+    // Update top senders (sorted set — zincrby)
+    await kv.zincrby('stats:senders', 1, fromAddress);
+
+    // Catat ke System Logs dengan detail lebih lengkap
     const logEntry = {
       id: Date.now().toString(),
-      type: 'webhook_received',
-      message: `Pesan baru diterima untuk ${emailTo}`,
+      type: 'email_received',
+      message: `Email diterima: "${subject}" dari ${fromAddress} → ${emailTo}`,
+      detail: { from: fromAddress, to: emailTo, subject },
       timestamp: new Date().toISOString()
     };
     await kv.lpush('system_logs', logEntry);
-    await kv.ltrim('system_logs', 0, 99); // Simpan 100 log terakhir
+    await kv.ltrim('system_logs', 0, 499); // simpan 500 log terakhir
 
     return NextResponse.json({ success: true, message: 'Email berhasil disimpan ke KV' });
   } catch (error) {
