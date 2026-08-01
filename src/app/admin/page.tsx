@@ -161,7 +161,7 @@ export default function AdminDashboard() {
             </div>
           </div>
           <h1 className="text-2xl font-bold text-white text-center mb-2">Admin Portal</h1>
-          <p className="text-slate-400 text-center mb-8 text-sm">Masuk dengan kata sandi admin (ADMIN_PASSWORD)</p>
+          <p className="text-slate-400 text-center mb-8 text-sm">Masuk dengan kata sandi admin</p>
           
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
