@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@vercel/kv';
-import { bot } from '@/bot/telegram';
+import { getBot } from '@/bot/telegram';
 
 const kv = createClient({
   url: process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL || '',
@@ -125,6 +125,12 @@ export async function GET(request: Request) {
 
     const maintenanceMode = (await kv.get('settings:maintenance')) || false;
     const autoBanThreshold = (await kv.get('settings:autoban_threshold')) || 0;
+    
+    const telegramSettings = {
+      botToken: (await kv.get('telegram:bot_token')) || '',
+      adminId: (await kv.get('telegram:admin_id')) || '',
+      domain: (await kv.get('telegram:domain')) || ''
+    };
 
     const emailsReceived = (await kv.get('stats:emails_received')) || 0;
 
@@ -185,6 +191,7 @@ export async function GET(request: Request) {
       whitelistIps,
       whitelistEmails,
       settings: { expiry: expiryTime, maintenance: maintenanceMode, autoBanThreshold },
+      telegramSettings,
       domainExpiry,
       stats: { emailsReceived, dailyStats, topSenders, topInboxes },
       systemLogs
@@ -387,15 +394,31 @@ export async function POST(request: Request) {
         }
         break;
 
-      // ── TELEGRAM WEBHOOK ──────────────────────────────────────────
+      // ── TELEGRAM WEBHOOK & SETTINGS ───────────────────────────────
+      case 'save_telegram_settings':
+        if (value && typeof value === 'object') {
+          if (value.botToken !== undefined) await kv.set('telegram:bot_token', value.botToken);
+          if (value.adminId !== undefined) await kv.set('telegram:admin_id', value.adminId);
+          if (value.domain !== undefined) await kv.set('telegram:domain', value.domain);
+          await addLog('settings', 'Konfigurasi Bot Telegram berhasil disimpan.');
+          return NextResponse.json({ success: true, message: 'Pengaturan Telegram berhasil disimpan!' });
+        }
+        break;
+
       case 'setup_telegram_webhook':
         if (value) {
           const webhookUrl = `${value}/api/telegram-webhook`;
           try {
-            await bot.api.setWebhook(webhookUrl);
+            const botToken = await kv.get('telegram:bot_token') as string;
+            if (!botToken) {
+              return NextResponse.json({ error: 'Bot Token belum dikonfigurasi!' }, { status: 400 });
+            }
+            const tempBot = getBot(botToken, '', '');
+            await tempBot.api.setWebhook(webhookUrl);
             await addLog('settings', `Telegram Webhook disetel ke: ${webhookUrl}`);
             return NextResponse.json({ success: true, message: 'Webhook Telegram berhasil diaktifkan!' });
           } catch (err: any) {
+            await addLog('auth_fail', `Gagal set Webhook Telegram: ${err.message}`);
             return NextResponse.json({ error: err.message }, { status: 500 });
           }
         }

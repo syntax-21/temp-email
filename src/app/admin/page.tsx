@@ -107,11 +107,21 @@ export default function AdminDashboard() {
   const [domainExpiryInputs, setDomainExpiryInputs] = useState<Record<string, number>>({});
   const [autoBanInput, setAutoBanInput] = useState(0);
 
+  // Telegram settings states
+  const [telegramBotToken, setTelegramBotToken] = useState('');
+  const [telegramAdminId, setTelegramAdminId] = useState('');
+  const [telegramDomain, setTelegramDomain] = useState('');
+
   // ─── Auth ─────────────────────────────────────────────────────────
   const applyData = (result: any) => {
     setData(result);
     if (result.settings?.expiry) setExpiryHours(result.settings.expiry / 3600);
     if (result.settings?.autoBanThreshold !== undefined) setAutoBanInput(result.settings.autoBanThreshold);
+    if (result.telegramSettings) {
+      setTelegramBotToken(result.telegramSettings.botToken || '');
+      setTelegramAdminId(result.telegramSettings.adminId || '');
+      setTelegramDomain(result.telegramSettings.domain || '');
+    }
     if (result.domainExpiry) {
       const inputs: Record<string, number> = {};
       for (const [d, sec] of Object.entries(result.domainExpiry)) {
@@ -199,10 +209,11 @@ export default function AdminDashboard() {
 
   const setupTelegramWebhook = async () => {
     try {
+      const targetDomain = telegramDomain || window.location.origin;
       const res = await fetch('/api/admin', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${password}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'setup_telegram_webhook', value: window.location.origin })
+        body: JSON.stringify({ action: 'setup_telegram_webhook', value: targetDomain })
       });
       const json = await res.json();
       if (res.ok) {
@@ -212,6 +223,25 @@ export default function AdminDashboard() {
         alert('Gagal mengaktifkan webhook: ' + json.error);
       }
     } catch { alert('Error jaringan saat mengaktifkan webhook'); }
+  };
+
+  const saveTelegramSettings = async () => {
+    try {
+      const res = await fetch('/api/admin', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${password}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          action: 'save_telegram_settings', 
+          value: { botToken: telegramBotToken, adminId: telegramAdminId, domain: telegramDomain } 
+        })
+      });
+      if (res.ok) {
+        alert('Konfigurasi Telegram berhasil disimpan!');
+        refreshData();
+      } else {
+        alert('Gagal menyimpan konfigurasi Telegram.');
+      }
+    } catch { alert('Error jaringan'); }
   };
 
   const handleExport = async (format: string) => {
@@ -635,16 +665,42 @@ export default function AdminDashboard() {
 
             {/* Telegram Webhook Setup */}
             <div className="bg-slate-900 p-6 rounded-2xl border border-blue-900/30">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <h3 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
+                <Globe className="w-5 h-5 text-blue-400" /> Setup Bot Telegram
+              </h3>
+              <p className="text-slate-400 text-sm mb-4">Atur Token dari BotFather dan ID Admin untuk mengendalikan bot dari Telegram.</p>
+              
+              <div className="space-y-4 mb-6">
                 <div>
-                  <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                    <Globe className="w-5 h-5 text-blue-400" /> Setup Bot Telegram
-                  </h3>
-                  <p className="text-slate-400 text-sm mt-1">Sambungkan Webhook Bot Telegram secara otomatis ke URL website ini.</p>
+                  <label className="block text-xs font-bold text-slate-500 mb-1">TELEGRAM BOT TOKEN</label>
+                  <input type="password" value={telegramBotToken} onChange={e => setTelegramBotToken(e.target.value)}
+                    placeholder="Contoh: 123456789:ABCDefgh..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white focus:border-blue-500 outline-none text-sm" />
                 </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">TELEGRAM ADMIN ID</label>
+                    <input type="text" value={telegramAdminId} onChange={e => setTelegramAdminId(e.target.value)}
+                      placeholder="Contoh: 987654321"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white focus:border-blue-500 outline-none text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">DOMAIN BOT (Default: URL Web)</label>
+                    <input type="text" value={telegramDomain} onChange={e => setTelegramDomain(e.target.value)}
+                      placeholder="contoh.com"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white focus:border-blue-500 outline-none text-sm" />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-3 border-t border-slate-800 pt-5">
+                <button onClick={saveTelegramSettings}
+                  className="bg-slate-800 hover:bg-slate-700 text-white px-6 py-3 rounded-xl font-bold transition-colors flex-1 text-center">
+                  1. Simpan Konfigurasi
+                </button>
                 <button onClick={setupTelegramWebhook}
-                  className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 transition-colors whitespace-nowrap shadow-lg shadow-blue-900/20">
-                  <RefreshCcw className="w-4 h-4" /> Sinkronkan Webhook
+                  className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-colors flex-1 shadow-lg shadow-blue-900/20">
+                  <RefreshCcw className="w-4 h-4" /> 2. Sinkronkan Webhook
                 </button>
               </div>
             </div>
