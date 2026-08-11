@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@vercel/kv';
+import { bot } from '@/bot/telegram';
 
 const kv = createClient({
   url: process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL || '',
@@ -383,6 +384,20 @@ export async function POST(request: Request) {
         if (value) {
           await kv.srem('reserved_names', value);
           return NextResponse.json({ success: true });
+        }
+        break;
+
+      // ── TELEGRAM WEBHOOK ──────────────────────────────────────────
+      case 'setup_telegram_webhook':
+        if (value) {
+          const webhookUrl = `${value}/api/telegram-webhook`;
+          try {
+            await bot.api.setWebhook(webhookUrl);
+            await addLog('settings', `Telegram Webhook disetel ke: ${webhookUrl}`);
+            return NextResponse.json({ success: true, message: 'Webhook Telegram berhasil diaktifkan!' });
+          } catch (err: any) {
+            return NextResponse.json({ error: err.message }, { status: 500 });
+          }
         }
         break;
     }

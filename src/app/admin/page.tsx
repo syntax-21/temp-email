@@ -197,6 +197,23 @@ export default function AdminDashboard() {
     await silentPost('toggle_maintenance');
   };
 
+  const setupTelegramWebhook = async () => {
+    try {
+      const res = await fetch('/api/admin', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${password}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'setup_telegram_webhook', value: window.location.origin })
+      });
+      const json = await res.json();
+      if (res.ok) {
+        alert(json.message || 'Webhook Telegram berhasil diaktifkan!');
+        refreshData();
+      } else {
+        alert('Gagal mengaktifkan webhook: ' + json.error);
+      }
+    } catch { alert('Error jaringan saat mengaktifkan webhook'); }
+  };
+
   const handleExport = async (format: string) => {
     try {
       const res = await fetch(`/api/admin?action=export&format=${format}`, {
@@ -612,6 +629,22 @@ export default function AdminDashboard() {
                   {data.settings?.maintenance
                     ? <><XCircle className="w-4 h-4" /> Nonaktifkan</>
                     : <><CheckCircle className="w-4 h-4" /> Aktifkan</>}
+                </button>
+              </div>
+            </div>
+
+            {/* Telegram Webhook Setup */}
+            <div className="bg-slate-900 p-6 rounded-2xl border border-blue-900/30">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                    <Globe className="w-5 h-5 text-blue-400" /> Setup Bot Telegram
+                  </h3>
+                  <p className="text-slate-400 text-sm mt-1">Sambungkan Webhook Bot Telegram secara otomatis ke URL website ini.</p>
+                </div>
+                <button onClick={setupTelegramWebhook}
+                  className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 transition-colors whitespace-nowrap shadow-lg shadow-blue-900/20">
+                  <RefreshCcw className="w-4 h-4" /> Sinkronkan Webhook
                 </button>
               </div>
             </div>
