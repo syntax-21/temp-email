@@ -8,7 +8,7 @@ const kv = createClient({
 
 export const dynamic = 'force-dynamic';
 
-const DEFAULT_DOMAINS = ['brepremiumstore.my.id', 'brepremiumstore.store'];
+const DEFAULT_DOMAINS = ['breonline.biz.id', 'brepremiumstore.my.id', 'brepremiumstore.store'];
 
 export async function GET() {
   try {

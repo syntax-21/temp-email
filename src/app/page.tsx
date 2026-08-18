@@ -31,8 +31,8 @@ export default function TempMail() {
   const prevEmailCountRef = useRef<number>(0);
   const initialLoadRef = useRef<boolean>(true);
 
-  const [domain, setDomain] = useState('brepremiumstore.my.id');
-  const [availableDomains, setAvailableDomains] = useState<string[]>(['brepremiumstore.my.id', 'brepremiumstore.store']);
+  const [domain, setDomain] = useState('breonline.biz.id');
+  const [availableDomains, setAvailableDomains] = useState<string[]>(['breonline.biz.id', 'brepremiumstore.my.id', 'brepremiumstore.store']);
   const [reservedNames, setReservedNames] = useState<string[]>([]);
 
   // Ask for notification permission
