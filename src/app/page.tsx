@@ -32,7 +32,7 @@ export default function TempMail() {
   const initialLoadRef = useRef<boolean>(true);
 
   const [domain, setDomain] = useState('breonline.biz.id');
-  const [availableDomains, setAvailableDomains] = useState<string[]>(['breonline.biz.id', 'brepremiumstore.my.id', 'brepremiumstore.store']);
+  const [availableDomains, setAvailableDomains] = useState<string[]>(['breonline.biz.id', 'breonline.my.id', 'brepremiumstore.my.id', 'brepremiumstore.store']);
   const [reservedNames, setReservedNames] = useState<string[]>([]);
 
   // Ask for notification permission
