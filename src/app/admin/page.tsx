@@ -53,17 +53,25 @@ function BarChart({ data }: { data: { date: string; count: number }[] }) {
 
 // ─── Log type color map ──────────────────────────────────────────────────────
 const LOG_COLORS: Record<string, string> = {
-  email_received:  'bg-blue-500/20 text-blue-400',
-  webhook_received:'bg-blue-500/20 text-blue-400',
-  ban:             'bg-orange-500/20 text-orange-400',
-  unban:           'bg-green-500/20 text-green-400',
-  ban_ip:          'bg-red-500/20 text-red-400',
-  unban_ip:        'bg-green-500/20 text-green-400',
-  auth_fail:       'bg-yellow-500/20 text-yellow-400',
-  settings:        'bg-purple-500/20 text-purple-400',
-  whitelist:       'bg-cyan-500/20 text-cyan-400',
-  master_reset:    'bg-red-500/20 text-red-400',
-  delete_inbox:    'bg-orange-500/20 text-orange-400',
+  email_received:   'bg-blue-500/20 text-blue-400',
+  webhook_received: 'bg-blue-500/20 text-blue-400',
+  ban:              'bg-orange-500/20 text-orange-400',
+  unban:            'bg-green-500/20 text-green-400',
+  ban_ip:           'bg-red-500/20 text-red-400',
+  unban_ip:         'bg-green-500/20 text-green-400',
+  auth_fail:        'bg-yellow-500/20 text-yellow-400',
+  settings:         'bg-purple-500/20 text-purple-400',
+  whitelist:        'bg-cyan-500/20 text-cyan-400',
+  master_reset:     'bg-red-500/20 text-red-400',
+  delete_inbox:     'bg-orange-500/20 text-orange-400',
+  TELEGRAM_USER:    'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30',
+  TELEGRAM_ADMIN:   'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30',
+  TELEGRAM_EMAIL:   'bg-blue-500/20 text-blue-300 border border-blue-500/30',
+  TELEGRAM_BOT:     'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30',
+  telegram_user:    'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30',
+  telegram_admin:   'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30',
+  telegram_email:   'bg-blue-500/20 text-blue-300 border border-blue-500/30',
+  telegram_bot:     'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30',
 };
 
 // ─── Main Component ──────────────────────────────────────────────────────────
@@ -1658,13 +1666,16 @@ export default function AdminDashboard() {
               <select value={logTypeFilter} onChange={e => setLogTypeFilter(e.target.value)}
                 className="bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-slate-300 focus:outline-none focus:border-blue-500 text-sm flex-1">
                 <option value="all">Semua Tipe Log</option>
-                <option value="email_received">📧 Email Masuk</option>
+                <option value="TELEGRAM_USER">🤖 Bot: Aktivitas Pengguna</option>
+                <option value="TELEGRAM_ADMIN">👑 Bot: Aksi Admin</option>
+                <option value="TELEGRAM_EMAIL">📬 Bot: Email Masuk &amp; OTP</option>
+                <option value="email_received">📧 Email Masuk (Server)</option>
+                <option value="settings">⚙️ Pengaturan &amp; Webhook</option>
                 <option value="ban">🚫 Ban Email</option>
                 <option value="unban">✅ Unban Email</option>
                 <option value="ban_ip">🔴 Ban IP</option>
                 <option value="unban_ip">✅ Unban IP</option>
                 <option value="auth_fail">⚠️ Auth Gagal</option>
-                <option value="settings">⚙️ Pengaturan</option>
                 <option value="whitelist">🌟 Whitelist</option>
                 <option value="master_reset">💥 Master Reset</option>
                 <option value="delete_inbox">🗑️ Hapus Inbox</option>

@@ -13,6 +13,22 @@ export const DEFAULT_DOMAINS = [
   'brepremiumstore.store'
 ];
 
+export async function logBotActivity(type: string, message: string, details?: any) {
+  try {
+    const logEntry = {
+      id: `log_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      timestamp: new Date().toISOString(),
+      type: type.toUpperCase(), // 'TELEGRAM_BOT', 'TELEGRAM_USER', 'TELEGRAM_ADMIN', 'TELEGRAM_EMAIL'
+      message,
+      details: details || {}
+    };
+    await kv.lpush('system_logs', logEntry);
+    await kv.ltrim('system_logs', 0, 499);
+  } catch (e) {
+    console.error('Failed to log bot activity to KV:', e);
+  }
+}
+
 export function escapeHtml(str: string = ''): string {
   return str
     .replace(/&/g, '&amp;')

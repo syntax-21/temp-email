@@ -1,5 +1,5 @@
 import { Bot, InlineKeyboard } from 'grammy';
-import { kv, escapeHtml, isUserAdmin } from '../helpers';
+import { kv, escapeHtml, isUserAdmin, logBotActivity } from '../helpers';
 import { getPersistentKeyboard } from '../keyboards';
 import {
   showAdminPanel,
@@ -24,6 +24,7 @@ export function registerAdminHandlers(bot: Bot, adminId: string, configuredDomai
     if (!isAdmin) {
       return ctx.reply('⛔ Akses ditolak. ID Telegram Anda tidak terdaftar sebagai Admin di Web Panel.');
     }
+    await logBotActivity('TELEGRAM_ADMIN', `Admin ID: ${chatId} membuka Panel Admin (/admin)`);
     return showAdminPanel(ctx, false);
   });
 
@@ -44,6 +45,7 @@ export function registerAdminHandlers(bot: Bot, adminId: string, configuredDomai
 
     const userInfo: TelegramUserInfo = ((await kv.get(`bot_user_info:${targetChatId}`)) as any) || { name: `User ${targetChatId}` };
 
+    await logBotActivity('TELEGRAM_ADMIN', `Admin menyetujui akses pengguna: ${userInfo.name} (ID: ${targetChatId})`);
     await ctx.answerCallbackQuery('✅ Akses pengguna disetujui!').catch(() => {});
 
     try {
@@ -82,6 +84,7 @@ export function registerAdminHandlers(bot: Bot, adminId: string, configuredDomai
 
     const userInfo: TelegramUserInfo = ((await kv.get(`bot_user_info:${targetChatId}`)) as any) || { name: `User ${targetChatId}` };
 
+    await logBotActivity('TELEGRAM_ADMIN', `Admin menolak/memblokir akses pengguna: ${userInfo.name} (ID: ${targetChatId})`);
     await ctx.answerCallbackQuery('❌ Akses pengguna ditolak / diblokir!').catch(() => {});
 
     try {
@@ -114,6 +117,7 @@ export function registerAdminHandlers(bot: Bot, adminId: string, configuredDomai
     await kv.srem('bot_pending_users', targetChatId);
     await kv.sadd('bot_approved_users', targetChatId);
 
+    await logBotActivity('TELEGRAM_ADMIN', `Admin membuka blokir pengguna ID: ${targetChatId}`);
     await ctx.answerCallbackQuery('♻️ Blokir dibuka!').catch(() => {});
 
     try {
@@ -198,6 +202,7 @@ export function registerAdminHandlers(bot: Bot, adminId: string, configuredDomai
     await kv.srem('bot_pending_users', targetChatId);
     await kv.srem('bot_banned_users', targetChatId);
 
+    await logBotActivity('TELEGRAM_ADMIN', `Admin menghapus permanen pengguna ID: ${targetChatId} beserta seluruh emailnya`);
     await ctx.answerCallbackQuery('Pengguna berhasil dihapus permanen').catch(() => {});
     return showAdminUsersHub(ctx, true);
   });
@@ -225,6 +230,7 @@ export function registerAdminHandlers(bot: Bot, adminId: string, configuredDomai
     } else {
       await kv.del('settings:maintenance');
     }
+    await logBotActivity('TELEGRAM_ADMIN', `Admin mengubah status maintenance menjadi: ${next ? 'AKTIF' : 'NONAKTIF'}`);
     await ctx.answerCallbackQuery(`Maintenance ${next ? 'Aktif' : 'Nonaktif'}`).catch(() => {});
     return showAdminPanel(ctx, true);
   });
@@ -303,6 +309,7 @@ export function registerAdminHandlers(bot: Bot, adminId: string, configuredDomai
     const current = (await kv.get('settings:approval_mode')) !== false;
     const next = !current;
     await kv.set('settings:approval_mode', next);
+    await logBotActivity('TELEGRAM_ADMIN', `Admin mengubah Wajib Approval menjadi: ${next ? 'AKTIF' : 'NONAKTIF'}`);
     await ctx.answerCallbackQuery(`Persetujuan Wajib ${next ? 'AKTIF' : 'NONAKTIF'}`).catch(() => {});
     return showAdminUsersHub(ctx, true);
   });
@@ -364,6 +371,7 @@ export function registerAdminHandlers(bot: Bot, adminId: string, configuredDomai
     }
     const domainToDelete = ctx.match[1];
     await kv.srem('domains', domainToDelete);
+    await logBotActivity('TELEGRAM_ADMIN', `Admin menghapus domain: @${domainToDelete}`);
     await ctx.answerCallbackQuery(`Domain ${domainToDelete} dihapus`).catch(() => {});
     return showAdminDomains(ctx, true);
   });
@@ -462,6 +470,7 @@ export function registerAdminHandlers(bot: Bot, adminId: string, configuredDomai
     if (keys && keys.length > 0) {
       await kv.del(...keys);
     }
+    await logBotActivity('TELEGRAM_ADMIN', `Admin melakukan MASTER RESET: menghapus ${keys.length} inbox`);
     await ctx.answerCallbackQuery(`Berhasil reset ${keys.length} inbox`).catch(() => {});
     return showAdminPanel(ctx, true);
   });
