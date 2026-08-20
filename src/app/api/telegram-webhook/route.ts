@@ -12,27 +12,30 @@ export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request) {
   try {
-    // Fetch Telegram Settings from KV
-    const botToken = await kv.get('telegram:bot_token') as string;
-    const adminId = await kv.get('telegram:admin_id') as string;
-    const domain = await kv.get('telegram:domain') as string;
+    // Fetch Telegram Settings from KV (fallback to environment variables if present)
+    const botToken = ((await kv.get('telegram:bot_token')) as string) || process.env.TELEGRAM_BOT_TOKEN || '';
+    const adminId = ((await kv.get('telegram:admin_id')) as string) || process.env.TELEGRAM_ADMIN_ID || '';
+    const domain = ((await kv.get('telegram:domain')) as string) || process.env.TELEGRAM_DEFAULT_DOMAIN || '';
 
     if (!botToken) {
-      console.error('Telegram Bot Token is not configured in Admin Panel.');
-      // Return 200 so Telegram stops retrying, or 400. We use 200 so Telegram knows we received it.
+      console.warn('Telegram Bot Token is not configured in Admin Panel or ENV.');
+      // Return 200 so Telegram webhook acknowledges receipt without endless retries
       return NextResponse.json({ error: 'Bot Token not configured' }, { status: 200 });
     }
 
     const bot = getBot(botToken, adminId, domain);
     const handleUpdate = webhookCallback(bot, 'std/http');
-    
+
     return await handleUpdate(request);
   } catch (err) {
-    console.error('Error handling telegram update', err);
+    console.error('Error handling telegram webhook update:', err);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
 
 export async function GET() {
-  return NextResponse.json({ status: 'Telegram Webhook is active' });
+  return NextResponse.json({
+    status: 'Telegram Webhook is active',
+    timestamp: new Date().toISOString()
+  });
 }

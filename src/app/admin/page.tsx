@@ -111,6 +111,7 @@ export default function AdminDashboard() {
   const [telegramBotToken, setTelegramBotToken] = useState('');
   const [telegramAdminId, setTelegramAdminId] = useState('');
   const [telegramDomain, setTelegramDomain] = useState('');
+  const [telegramBotUsername, setTelegramBotUsername] = useState('');
 
   // ─── Auth ─────────────────────────────────────────────────────────
   const applyData = (result: any) => {
@@ -121,6 +122,7 @@ export default function AdminDashboard() {
       setTelegramBotToken(result.telegramSettings.botToken || '');
       setTelegramAdminId(result.telegramSettings.adminId || '');
       setTelegramDomain(result.telegramSettings.domain || '');
+      setTelegramBotUsername(result.telegramSettings.botUsername || '');
     }
     if (result.domainExpiry) {
       const inputs: Record<string, number> = {};
@@ -235,13 +237,34 @@ export default function AdminDashboard() {
           value: { botToken: telegramBotToken, adminId: telegramAdminId, domain: telegramDomain } 
         })
       });
+      const json = await res.json();
       if (res.ok) {
-        alert('Konfigurasi Telegram berhasil disimpan!');
+        if (json.botUsername) setTelegramBotUsername(json.botUsername);
+        alert(json.message || 'Konfigurasi Telegram berhasil disimpan!');
         refreshData();
       } else {
         alert('Gagal menyimpan konfigurasi Telegram.');
       }
     } catch { alert('Error jaringan'); }
+  };
+
+  const testTelegramBot = async () => {
+    try {
+      const res = await fetch('/api/admin', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${password}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'test_telegram_bot' })
+      });
+      const json = await res.json();
+      if (res.ok) {
+        if (json.botUsername) setTelegramBotUsername(json.botUsername);
+        alert(json.message || 'Koneksi bot berhasil!');
+      } else {
+        alert('Gagal tes bot: ' + json.error);
+      }
+    } catch {
+      alert('Error jaringan saat menguji koneksi bot');
+    }
   };
 
   const handleExport = async (format: string) => {
@@ -665,42 +688,61 @@ export default function AdminDashboard() {
 
             {/* Telegram Webhook Setup */}
             <div className="bg-slate-900 p-6 rounded-2xl border border-blue-900/30">
-              <h3 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
-                <Globe className="w-5 h-5 text-blue-400" /> Setup Bot Telegram
-              </h3>
-              <p className="text-slate-400 text-sm mb-4">Atur Token dari BotFather dan ID Admin untuk mengendalikan bot dari Telegram.</p>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                  <Globe className="w-5 h-5 text-blue-400" /> Setup Bot Telegram
+                </h3>
+                {telegramBotUsername && (
+                  <a
+                    href={`https://t.me/${telegramBotUsername}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full text-xs font-semibold hover:bg-emerald-500/20 transition-colors"
+                  >
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                    @{telegramBotUsername} (Buka Bot)
+                  </a>
+                )}
+              </div>
+              <p className="text-slate-400 text-sm mb-4">
+                Atur Token dari <b>@BotFather</b> dan ID Admin Anda untuk mengendalikan & menerima email instan di Telegram.
+              </p>
               
               <div className="space-y-4 mb-6">
                 <div>
                   <label className="block text-xs font-bold text-slate-500 mb-1">TELEGRAM BOT TOKEN</label>
                   <input type="password" value={telegramBotToken} onChange={e => setTelegramBotToken(e.target.value)}
                     placeholder="Contoh: 123456789:ABCDefgh..."
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white focus:border-blue-500 outline-none text-sm" />
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white focus:border-blue-500 outline-none text-sm font-mono" />
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-1">TELEGRAM ADMIN ID</label>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">TELEGRAM ADMIN ID (Chat ID)</label>
                     <input type="text" value={telegramAdminId} onChange={e => setTelegramAdminId(e.target.value)}
-                      placeholder="Contoh: 987654321"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white focus:border-blue-500 outline-none text-sm" />
+                      placeholder="Dapatkan via @userinfobot (misal: 12345678)"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white focus:border-blue-500 outline-none text-sm font-mono" />
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-500 mb-1">DOMAIN BOT (Default: URL Web)</label>
                     <input type="text" value={telegramDomain} onChange={e => setTelegramDomain(e.target.value)}
-                      placeholder="contoh.com"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white focus:border-blue-500 outline-none text-sm" />
+                      placeholder="contoh: breonline.biz.id"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white focus:border-blue-500 outline-none text-sm font-mono" />
                   </div>
                 </div>
               </div>
 
-              <div className="flex flex-col sm:flex-row gap-3 border-t border-slate-800 pt-5">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 border-t border-slate-800 pt-5">
                 <button onClick={saveTelegramSettings}
-                  className="bg-slate-800 hover:bg-slate-700 text-white px-6 py-3 rounded-xl font-bold transition-colors flex-1 text-center">
+                  className="bg-slate-800 hover:bg-slate-700 text-white px-4 py-3 rounded-xl font-bold transition-colors text-center text-sm">
                   1. Simpan Konfigurasi
                 </button>
                 <button onClick={setupTelegramWebhook}
-                  className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-colors flex-1 shadow-lg shadow-blue-900/20">
-                  <RefreshCcw className="w-4 h-4" /> 2. Sinkronkan Webhook
+                  className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-colors text-center text-sm shadow-lg shadow-blue-900/20">
+                  <RefreshCcw className="w-4 h-4" /> 2. Set Webhook
+                </button>
+                <button onClick={testTelegramBot}
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-colors text-center text-sm shadow-lg shadow-emerald-900/20">
+                  ⚡ 3. Tes Koneksi Bot
                 </button>
               </div>
             </div>

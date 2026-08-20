@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Mail, RefreshCcw, Copy, Inbox, Sparkles, ChevronLeft, ChevronDown, Shield, Zap, Lock, QrCode, X, Globe, AlertTriangle, Key } from 'lucide-react';
+import { Mail, RefreshCcw, Copy, Inbox, Sparkles, ChevronLeft, ChevronDown, Shield, Zap, Lock, QrCode, X, Globe, AlertTriangle, Key, Send, Bot } from 'lucide-react';
 import { HUMAN_NAMES } from '../utils/names';
 import { t, Language } from '../utils/translations';
 import { playNotificationSound } from '../utils/audio';
@@ -34,6 +34,7 @@ export default function TempMail() {
   const [domain, setDomain] = useState('breonline.biz.id');
   const [availableDomains, setAvailableDomains] = useState<string[]>(['breonline.biz.id', 'breonline.my.id', 'brepremiumstore.my.id', 'brepremiumstore.store']);
   const [reservedNames, setReservedNames] = useState<string[]>([]);
+  const [telegramBotUsername, setTelegramBotUsername] = useState<string>('');
 
   // Ask for notification permission
   useEffect(() => {
@@ -76,6 +77,9 @@ export default function TempMail() {
         }
         if (data.reservedNames) {
           setReservedNames(data.reservedNames);
+        }
+        if (data.telegramBotUsername) {
+          setTelegramBotUsername(data.telegramBotUsername);
         }
       })
       .catch(err => console.error('Failed to load settings', err));
@@ -302,13 +306,32 @@ export default function TempMail() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4 w-full">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4 w-full">
               <button onClick={generateRandomEmail} className="bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium rounded-xl px-4 py-3.5 transition-all text-sm flex items-center justify-center gap-2 border border-slate-700">
                 <Sparkles className="w-4 h-4 text-cyan-400" /> {t(lang, 'randomize')}
               </button>
               <button onClick={() => { fetchEmails(); setCountdown(10); }} className="bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium rounded-xl px-4 py-3.5 transition-all text-sm flex items-center justify-center gap-2 border border-slate-700">
                 <RefreshCcw className={`w-4 h-4 text-blue-400 ${loading ? 'animate-spin' : ''}`} /> {t(lang, 'refresh')} ({countdown}s)
               </button>
+              {telegramBotUsername ? (
+                <a
+                  href={`https://t.me/${telegramBotUsername}?start=sync_${emailAddress.replace(/@/g, '_').replace(/\./g, '_')}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 hover:text-white font-medium rounded-xl px-4 py-3.5 transition-all text-sm flex items-center justify-center gap-2 border border-blue-500/30 hover:border-blue-400 shadow-lg shadow-blue-500/10"
+                >
+                  <Send className="w-4 h-4 text-blue-400" /> {t(lang, 'openInTelegram')}
+                </a>
+              ) : (
+                <a
+                  href={`https://t.me`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-slate-200 font-medium rounded-xl px-4 py-3.5 transition-all text-sm flex items-center justify-center gap-2 border border-slate-800"
+                >
+                  <Bot className="w-4 h-4 text-blue-400" /> {t(lang, 'openInTelegram')}
+                </a>
+              )}
             </div>
           </div>
         </div>

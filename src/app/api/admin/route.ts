@@ -129,7 +129,8 @@ export async function GET(request: Request) {
     const telegramSettings = {
       botToken: (await kv.get('telegram:bot_token')) || '',
       adminId: (await kv.get('telegram:admin_id')) || '',
-      domain: (await kv.get('telegram:domain')) || ''
+      domain: (await kv.get('telegram:domain')) || '',
+      botUsername: (await kv.get('telegram:bot_username')) || ''
     };
 
     const emailsReceived = (await kv.get('stats:emails_received')) || 0;
@@ -400,29 +401,80 @@ export async function POST(request: Request) {
           if (value.botToken !== undefined) await kv.set('telegram:bot_token', value.botToken);
           if (value.adminId !== undefined) await kv.set('telegram:admin_id', value.adminId);
           if (value.domain !== undefined) await kv.set('telegram:domain', value.domain);
-          await addLog('settings', 'Konfigurasi Bot Telegram berhasil disimpan.');
-          return NextResponse.json({ success: true, message: 'Pengaturan Telegram berhasil disimpan!' });
+          
+          let botUsername = '';
+          if (value.botToken) {
+            try {
+              const tempBot = getBot(value.botToken, '', '');
+              const me = await tempBot.api.getMe();
+              if (me && me.username) {
+                botUsername = me.username;
+                await kv.set('telegram:bot_username', me.username);
+              }
+            } catch (e) {
+              console.warn('Could not auto-fetch bot username', e);
+            }
+          }
+          await addLog('settings', `Konfigurasi Bot Telegram disimpan ${botUsername ? `(@${botUsername})` : ''}`);
+          return NextResponse.json({ success: true, botUsername, message: 'Pengaturan Telegram berhasil disimpan!' });
         }
         break;
 
       case 'setup_telegram_webhook':
         if (value) {
-          const webhookUrl = `${value}/api/telegram-webhook`;
+          const webhookUrl = `${value.toString().replace(/\/$/, '')}/api/telegram-webhook`;
           try {
-            const botToken = await kv.get('telegram:bot_token') as string;
+            const botToken = ((await kv.get('telegram:bot_token')) as string) || process.env.TELEGRAM_BOT_TOKEN;
             if (!botToken) {
               return NextResponse.json({ error: 'Bot Token belum dikonfigurasi!' }, { status: 400 });
             }
             const tempBot = getBot(botToken, '', '');
+            const me = await tempBot.api.getMe();
+            if (me && me.username) {
+              await kv.set('telegram:bot_username', me.username);
+            }
             await tempBot.api.setWebhook(webhookUrl);
-            await addLog('settings', `Telegram Webhook disetel ke: ${webhookUrl}`);
-            return NextResponse.json({ success: true, message: 'Webhook Telegram berhasil diaktifkan!' });
+            await addLog('settings', `Telegram Webhook disetel ke: ${webhookUrl} (@${me.username || 'bot'})`);
+            return NextResponse.json({
+              success: true,
+              botUsername: me.username,
+              message: `Webhook Telegram berhasil diaktifkan untuk @${me.username || 'bot'}!`
+            });
           } catch (err: any) {
             await addLog('auth_fail', `Gagal set Webhook Telegram: ${err.message}`);
             return NextResponse.json({ error: err.message }, { status: 500 });
           }
         }
         break;
+
+      case 'test_telegram_bot': {
+        const botToken = ((await kv.get('telegram:bot_token')) as string) || process.env.TELEGRAM_BOT_TOKEN;
+        const adminId = ((await kv.get('telegram:admin_id')) as string) || process.env.TELEGRAM_ADMIN_ID;
+        if (!botToken) {
+          return NextResponse.json({ error: 'Bot Token belum diisi!' }, { status: 400 });
+        }
+        try {
+          const tempBot = getBot(botToken, adminId || '', '');
+          const me = await tempBot.api.getMe();
+          if (me && me.username) {
+            await kv.set('telegram:bot_username', me.username);
+          }
+          if (adminId) {
+            await tempBot.api.sendMessage(
+              adminId,
+              `✅ *Tes Koneksi Bot Berhasil!*\n\nBot *@${me.username}* terhubung dengan server Temp Mail dan siap digunakan.`,
+              { parse_mode: 'Markdown' }
+            );
+          }
+          return NextResponse.json({
+            success: true,
+            botUsername: me.username,
+            message: `Koneksi berhasil! Bot: @${me.username}${adminId ? ' (Pesan tes terkirim ke Admin ID Telegram Anda)' : ''}`
+          });
+        } catch (err: any) {
+          return NextResponse.json({ error: `Gagal tes koneksi: ${err.message}` }, { status: 500 });
+        }
+      }
     }
 
     return NextResponse.json({ error: 'Invalid action or missing parameters' }, { status: 400 });

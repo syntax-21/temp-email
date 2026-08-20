@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@vercel/kv';
 import PostalMime from 'postal-mime';
+import { extractOtp, getBot } from '@/bot/telegram';
 
 const kv = createClient({
   url: process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL || '',
@@ -103,6 +104,70 @@ export async function POST(request: Request) {
     };
     await kv.lpush('system_logs', logEntry);
     await kv.ltrim('system_logs', 0, 499); // simpan 500 log terakhir
+
+    // ── Instant Realtime Push Notification to Telegram Users ────────────────
+    try {
+      const userChatIds = await kv.smembers(`bot_email_users:${emailTo}`) as string[];
+      const botToken = ((await kv.get('telegram:bot_token')) as string) || process.env.TELEGRAM_BOT_TOKEN;
+      const adminId = ((await kv.get('telegram:admin_id')) as string) || '';
+      const customDomain = ((await kv.get('telegram:domain')) as string) || domain;
+
+      if (botToken && userChatIds && userChatIds.length > 0) {
+        const bot = getBot(botToken, adminId, customDomain);
+        const otp = extractOtp(newEmail.text, newEmail.subject);
+
+        let preview = (newEmail.text || '').replace(/\s+/g, ' ').trim();
+        if (!preview && newEmail.html) {
+          preview = newEmail.html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+        }
+        if (preview.length > 180) {
+          preview = preview.substring(0, 180) + '...';
+        }
+        if (!preview) preview = '(Tidak ada teks preview)';
+
+        const senderDisplay = newEmail.fromName ? `${newEmail.fromName} (${fromAddress})` : fromAddress;
+
+        let pushText =
+          `🔔 *EMAIL BARU DITERIMA!*\n\n` +
+          `📫 *Alamat:* \`${emailTo}\`\n` +
+          `👤 *Dari:* ${senderDisplay}\n` +
+          `📌 *Subjek:* *${subject}*\n`;
+
+        if (otp) {
+          pushText +=
+            `\n───────────────────────\n` +
+            `🔑 *KODE OTP / VERIFIKASI:*\n` +
+            `👉 \`${otp}\` 👈 _(tekan untuk salin)_\n` +
+            `───────────────────────\n`;
+        } else {
+          pushText += `───────────────────────\n`;
+        }
+
+        pushText += `📝 *Cuplikan:*\n_${preview}_`;
+
+        const keyboard = {
+          inline_keyboard: [
+            [
+              { text: '📖 Baca Email Lengkap', callback_data: `read_email:${emailTo}:${newEmail.id}` },
+              { text: '📥 Kotak Masuk', callback_data: `view_inbox:${emailTo}` }
+            ]
+          ]
+        };
+
+        for (const chatId of userChatIds) {
+          try {
+            await bot.api.sendMessage(chatId, pushText, {
+              parse_mode: 'Markdown',
+              reply_markup: keyboard
+            });
+          } catch (sendErr) {
+            console.error(`Failed to send telegram notification to chatId ${chatId}:`, sendErr);
+          }
+        }
+      }
+    } catch (pushErr) {
+      console.error('Error dispatching telegram push notification:', pushErr);
+    }
 
     return NextResponse.json({ success: true, message: 'Email berhasil disimpan ke KV' });
   } catch (error) {

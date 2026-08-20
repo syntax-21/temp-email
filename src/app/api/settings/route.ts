@@ -13,21 +13,23 @@ const DEFAULT_DOMAINS = ['breonline.biz.id', 'breonline.my.id', 'brepremiumstore
 export async function GET() {
   try {
     const customDomains = await kv.smembers('domains');
-    const reservedNames = await kv.smembers('reserved_names') || [];
+    const reservedNames = (await kv.smembers('reserved_names')) || [];
+    const botUsername = (await kv.get('telegram:bot_username')) || process.env.TELEGRAM_BOT_USERNAME || '';
     
     // If no custom domains in DB, use default ones
     const activeDomains = (customDomains && customDomains.length > 0) ? customDomains : DEFAULT_DOMAINS;
 
     return NextResponse.json({
       domains: activeDomains,
-      reservedNames: reservedNames
+      reservedNames: reservedNames,
+      telegramBotUsername: botUsername
     });
   } catch (error) {
     console.error('Settings API error:', error);
-    // Graceful degradation on error
     return NextResponse.json({ 
       domains: DEFAULT_DOMAINS,
-      reservedNames: []
+      reservedNames: [],
+      telegramBotUsername: ''
     });
   }
 }

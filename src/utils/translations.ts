@@ -8,8 +8,8 @@ export const translations = {
     typeCustomName: "ketik_nama_bebas",
     copied: "Tersalin!",
     copy: "Copy",
-    randomize: "Randomize Name",
-    refresh: "Refresh",
+    randomize: "Acak Email Baru",
+    refresh: "Segarkan",
     inbox: "Kotak Masuk",
     emptyInbox: "Belum ada pesan masuk.",
     autoRefreshHint: "Sistem menyegarkan otomatis setiap 10 detik.",
@@ -28,7 +28,9 @@ export const translations = {
     wrongPin: "PIN Salah!",
     unlock: "Buka",
     lockedDesc: "Kotak masuk ini dilindungi oleh PIN. Masukkan PIN yang benar untuk melihat isi pesan.",
-    blockedDomain: "Nama ini dilarang digunakan."
+    blockedDomain: "Nama ini dilarang digunakan.",
+    openInTelegram: "Buka di Telegram",
+    telegramBanner: "✨ Sekarang dapat diakses via Telegram Bot! Dapatkan notifikasi OTP instan tanpa perlu buka web."
   },
   en: {
     welcomeTitle: "Welcome to TMail",
@@ -57,7 +59,9 @@ export const translations = {
     wrongPin: "Wrong PIN!",
     unlock: "Unlock",
     lockedDesc: "This inbox is protected by a PIN. Enter the correct PIN to view your messages.",
-    blockedDomain: "This name is reserved and cannot be used."
+    blockedDomain: "This name is reserved and cannot be used.",
+    openInTelegram: "Open in Telegram",
+    telegramBanner: "✨ Now accessible via Telegram Bot! Get instant OTP alerts without keeping browser open."
   }
 };
 
