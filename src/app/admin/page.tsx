@@ -350,6 +350,10 @@ export default function AdminDashboard() {
     } catch { alert('Error jaringan'); }
   };
 
+  const rejectTelegramUser = async (chatId: string) => {
+    return banTelegramUser(chatId, 'Permintaan akses ditolak oleh Admin');
+  };
+
   const unbanTelegramUser = async (chatId: string) => {
     try {
       const res = await fetch('/api/admin', {
@@ -1321,20 +1325,28 @@ export default function AdminDashboard() {
                     Setiap user baru yang mengetik /start akan masuk ke antrean verifikasi untuk disetujui/ditolak.
                   </p>
                 </div>
-                <button
-                  onClick={toggleApprovalMode}
-                  className={`px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-2 transition-colors whitespace-nowrap ${
-                    data.telegramUsers?.approvalMode !== false
-                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                      : 'bg-slate-800 text-slate-400 border border-slate-700'
-                  }`}
-                >
-                  {data.telegramUsers?.approvalMode !== false ? (
-                    <><CheckCircle className="w-4 h-4 text-emerald-400" /> Wajib Approval: AKTIF</>
-                  ) : (
-                    <><XCircle className="w-4 h-4 text-slate-400" /> Wajib Approval: NONAKTIF</>
-                  )}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setActiveTab('telegram_users')}
+                    className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-2 transition-colors shadow-lg shadow-cyan-900/20"
+                  >
+                    <Users className="w-4 h-4" /> Buka Tab Pengguna Lengkap →
+                  </button>
+                  <button
+                    onClick={toggleApprovalMode}
+                    className={`px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-2 transition-colors whitespace-nowrap ${
+                      data.telegramUsers?.approvalMode !== false
+                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                        : 'bg-slate-800 text-slate-400 border border-slate-700'
+                    }`}
+                  >
+                    {data.telegramUsers?.approvalMode !== false ? (
+                      <><CheckCircle className="w-4 h-4 text-emerald-400" /> Wajib Approval: AKTIF</>
+                    ) : (
+                      <><XCircle className="w-4 h-4 text-slate-400" /> Wajib Approval: NONAKTIF</>
+                    )}
+                  </button>
+                </div>
               </div>
 
               {/* Pending Requests */}
@@ -1368,35 +1380,6 @@ export default function AdminDashboard() {
                             <UserX className="w-3.5 h-3.5" /> Tolak
                           </button>
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Approved Users List */}
-              <div>
-                <h4 className="text-sm font-bold text-emerald-400 mb-3 flex items-center gap-1.5">
-                  <UserCheck className="w-4 h-4" /> Pengguna Terverifikasi ({data.telegramUsers?.approved?.length || 0})
-                </h4>
-                {(!data.telegramUsers?.approved || data.telegramUsers.approved.length === 0) ? (
-                  <p className="text-slate-500 text-xs italic bg-slate-950 p-4 rounded-xl border border-slate-800">
-                    Belum ada pengguna yang diverifikasi.
-                  </p>
-                ) : (
-                  <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
-                    {data.telegramUsers.approved.map((u: any) => (
-                      <div key={u.id} className="flex items-center justify-between p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs">
-                        <div>
-                          <p className="text-white font-medium">{u.name} {u.username ? <span className="text-blue-400">(@{u.username})</span> : ''}</p>
-                          <p className="text-slate-500 font-mono">ID: {u.id}</p>
-                        </div>
-                        <button
-                          onClick={() => rejectTelegramUser(u.id)}
-                          className="text-slate-500 hover:text-red-400 text-xs flex items-center gap-1 px-2 py-1 bg-slate-900 rounded border border-slate-800 hover:border-red-500/40 transition-colors"
-                        >
-                          <UserX className="w-3 h-3" /> Cabut Akses
-                        </button>
                       </div>
                     ))}
                   </div>
