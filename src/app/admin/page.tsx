@@ -5,7 +5,7 @@ import {
   Lock, Mail, Eye, ChevronDown, ChevronUp, ShieldAlert, LogOut, RefreshCcw,
   Search, Inbox, Trash2, Ban, ShieldCheck, X, Settings, Shield, BarChart3,
   Database, Globe, List, Download, Star, AlertTriangle, Clock, Filter,
-  CheckCircle, XCircle, Users, UserCheck, UserX
+  CheckCircle, XCircle, Users, UserCheck, UserX, UserPlus, Send, MessageSquare, RotateCcw
 } from 'lucide-react';
 
 // ─── SVG Bar Chart (no external dependencies) ───────────────────────────────
@@ -108,12 +108,27 @@ export default function AdminDashboard() {
   const [domainExpiryInputs, setDomainExpiryInputs] = useState<Record<string, number>>({});
   const [autoBanInput, setAutoBanInput] = useState(0);
 
-  // Telegram settings states
+  // Telegram settings & users states
   const [telegramBotToken, setTelegramBotToken] = useState('');
   const [telegramAdminId, setTelegramAdminId] = useState('');
   const [telegramDomain, setTelegramDomain] = useState('');
   const [telegramBotUsername, setTelegramBotUsername] = useState('');
   const [webhookInfo, setWebhookInfo] = useState<any>(null);
+
+  // Telegram User Management Modal & Filter States
+  const [userSearchQuery, setUserSearchQuery] = useState('');
+  const [userStatusFilter, setUserStatusFilter] = useState<'all' | 'pending' | 'approved' | 'banned'>('all');
+  
+  const [isAddUserModalOpen, setIsAddUserModalOpen] = useState(false);
+  const [newUserId, setNewUserId] = useState('');
+  const [newUserName, setNewUserName] = useState('');
+  const [newUserUsername, setNewUserUsername] = useState('');
+  const [newUserStatus, setNewUserStatus] = useState<'approved' | 'pending' | 'banned'>('approved');
+  const [newUserNotes, setNewUserNotes] = useState('');
+
+  const [isDmModalOpen, setIsDmModalOpen] = useState(false);
+  const [dmTargetUser, setDmTargetUser] = useState<any>(null);
+  const [dmMessageText, setDmMessageText] = useState('');
 
   // ─── Auth ─────────────────────────────────────────────────────────
   const applyData = (result: any) => {
@@ -316,20 +331,110 @@ export default function AdminDashboard() {
     } catch { alert('Error jaringan'); }
   };
 
-  const rejectTelegramUser = async (chatId: string) => {
-    if (!confirm('Yakin ingin menolak/memblokir user ini?')) return;
+  const banTelegramUser = async (chatId: string, reason: string = 'Diblokir oleh Admin') => {
+    const customReason = prompt('Masukkan alasan pemblokiran:', reason);
+    if (customReason === null) return;
     try {
       const res = await fetch('/api/admin', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${password}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'reject_telegram_user', value: chatId })
+        body: JSON.stringify({ action: 'ban_telegram_user', value: { id: chatId, reason: customReason } })
       });
       const json = await res.json();
       if (res.ok) {
-        alert(json.message || 'User berhasil ditolak/diblokir!');
+        alert(json.message || 'User berhasil diblokir!');
         refreshData();
       } else {
-        alert('Gagal menolak user: ' + json.error);
+        alert('Gagal memblokir user: ' + json.error);
+      }
+    } catch { alert('Error jaringan'); }
+  };
+
+  const unbanTelegramUser = async (chatId: string) => {
+    try {
+      const res = await fetch('/api/admin', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${password}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'unban_telegram_user', value: chatId })
+      });
+      const json = await res.json();
+      if (res.ok) {
+        alert(json.message || 'Blokir user berhasil dibuka!');
+        refreshData();
+      } else {
+        alert('Gagal membuka blokir user: ' + json.error);
+      }
+    } catch { alert('Error jaringan'); }
+  };
+
+  const deleteTelegramUser = async (chatId: string) => {
+    if (!confirm(`Hapus permanen user ${chatId} beserta seluruh email & kotaknya?`)) return;
+    try {
+      const res = await fetch('/api/admin', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${password}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete_telegram_user', value: chatId })
+      });
+      const json = await res.json();
+      if (res.ok) {
+        alert(json.message || 'User berhasil dihapus!');
+        refreshData();
+      } else {
+        alert('Gagal menghapus user: ' + json.error);
+      }
+    } catch { alert('Error jaringan'); }
+  };
+
+  const submitAddUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newUserId.trim()) { alert('ID Telegram wajib diisi!'); return; }
+    try {
+      const res = await fetch('/api/admin', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${password}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'add_telegram_user',
+          value: {
+            id: newUserId.trim(),
+            name: newUserName.trim() || `User ${newUserId.trim()}`,
+            username: newUserUsername.trim(),
+            status: newUserStatus,
+            notes: newUserNotes.trim()
+          }
+        })
+      });
+      const json = await res.json();
+      if (res.ok) {
+        alert(json.message || 'User berhasil ditambahkan!');
+        setIsAddUserModalOpen(false);
+        setNewUserId(''); setNewUserName(''); setNewUserUsername(''); setNewUserNotes('');
+        refreshData();
+      } else {
+        alert('Gagal menambahkan user: ' + json.error);
+      }
+    } catch { alert('Error jaringan'); }
+  };
+
+  const submitSendDm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!dmTargetUser || !dmMessageText.trim()) return;
+    try {
+      const res = await fetch('/api/admin', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${password}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'send_telegram_user_message',
+          value: { id: dmTargetUser.id, message: dmMessageText.trim() }
+        })
+      });
+      const json = await res.json();
+      if (res.ok) {
+        alert(json.message || 'Pesan berhasil terkirim!');
+        setIsDmModalOpen(false);
+        setDmMessageText('');
+        setDmTargetUser(null);
+      } else {
+        alert('Gagal mengirim pesan: ' + json.error);
       }
     } catch { alert('Error jaringan'); }
   };
@@ -423,12 +528,13 @@ export default function AdminDashboard() {
   }
 
   const TABS = [
-    { id: 'inboxes',   label: 'Kotak Masuk',   icon: Inbox },
-    { id: 'analytics', label: 'Statistik',      icon: BarChart3 },
-    { id: 'export',    label: 'Ekspor',         icon: Download },
-    { id: 'settings',  label: 'Pengaturan',     icon: Settings },
-    { id: 'security',  label: 'Keamanan',       icon: Shield },
-    { id: 'logs',      label: 'Log Sistem',     icon: List },
+    { id: 'inboxes',        label: 'Kotak Masuk',    icon: Inbox },
+    { id: 'telegram_users', label: 'Pengguna Bot',   icon: Users },
+    { id: 'analytics',      label: 'Statistik',      icon: BarChart3 },
+    { id: 'export',         label: 'Ekspor',         icon: Download },
+    { id: 'settings',       label: 'Pengaturan',     icon: Settings },
+    { id: 'security',       label: 'Keamanan',       icon: Shield },
+    { id: 'logs',           label: 'Log Sistem',     icon: List },
   ];
 
   // ─── Dashboard ────────────────────────────────────────────────────
@@ -448,9 +554,150 @@ export default function AdminDashboard() {
               </button>
             </div>
             <div className="flex-1 relative">
-              <iframe srcDoc={selectedHtmlEmail} className="absolute inset-0 w-full h-full border-0"
-                title="Email HTML" sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin" />
+              <iframe
+                srcDoc={selectedHtmlEmail}
+                title="Email Content"
+                className="w-full h-full border-none"
+                sandbox="allow-same-origin"
+              />
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Tambah User Telegram Manual */}
+      {isAddUserModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-2xl p-6 shadow-2xl space-y-4">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-800">
+              <h3 className="font-bold text-lg text-white flex items-center gap-2">
+                <UserPlus className="w-5 h-5 text-cyan-400" /> Tambah User Telegram
+              </h3>
+              <button onClick={() => setIsAddUserModalOpen(false)} className="p-1 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={submitAddUser} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-400 mb-1">TELEGRAM CHAT ID *</label>
+                <input
+                  type="text"
+                  required
+                  value={newUserId}
+                  onChange={e => setNewUserId(e.target.value)}
+                  placeholder="Contoh: 123456789 (Dapatkan via @userinfobot)"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-white text-sm font-mono focus:border-cyan-500 outline-none"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 mb-1">NAMA LENGKAP</label>
+                  <input
+                    type="text"
+                    value={newUserName}
+                    onChange={e => setNewUserName(e.target.value)}
+                    placeholder="Budi Pratama"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white text-sm focus:border-cyan-500 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 mb-1">USERNAME (@)</label>
+                  <input
+                    type="text"
+                    value={newUserUsername}
+                    onChange={e => setNewUserUsername(e.target.value)}
+                    placeholder="budipratama"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white text-sm focus:border-cyan-500 outline-none"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-400 mb-1">STATUS AKSES</label>
+                <select
+                  value={newUserStatus}
+                  onChange={e => setNewUserStatus(e.target.value as any)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-white text-sm focus:border-cyan-500 outline-none"
+                >
+                  <option value="approved">🟢 Langsung Disetujui (Aktif)</option>
+                  <option value="pending">⏳ Menunggu Persetujuan (Pending)</option>
+                  <option value="banned">🔴 Diblokir (Banned)</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-400 mb-1">CATATAN ADMIN</label>
+                <input
+                  type="text"
+                  value={newUserNotes}
+                  onChange={e => setNewUserNotes(e.target.value)}
+                  placeholder="VIP member / Rekan kerja"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white text-sm focus:border-cyan-500 outline-none"
+                />
+              </div>
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsAddUserModalOpen(false)}
+                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 rounded-xl text-sm transition-colors"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-2.5 rounded-xl text-sm transition-colors shadow-lg shadow-cyan-900/20"
+                >
+                  Simpan User
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Kirim Pesan / DM ke User */}
+      {isDmModalOpen && dmTargetUser && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-2xl p-6 shadow-2xl space-y-4">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-800">
+              <div>
+                <h3 className="font-bold text-lg text-white flex items-center gap-2">
+                  <Send className="w-5 h-5 text-blue-400" /> Kirim Pesan Telegram
+                </h3>
+                <p className="text-slate-400 text-xs mt-0.5">
+                  Ke: <b>{dmTargetUser.name}</b> (ID: <code>{dmTargetUser.id}</code>)
+                </p>
+              </div>
+              <button onClick={() => setIsDmModalOpen(false)} className="p-1 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={submitSendDm} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-400 mb-1">ISI PESAN</label>
+                <textarea
+                  rows={4}
+                  required
+                  value={dmMessageText}
+                  onChange={e => setDmMessageText(e.target.value)}
+                  placeholder="Ketik pesan atau peringatan untuk pengguna ini..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white text-sm focus:border-blue-500 outline-none resize-none"
+                />
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsDmModalOpen(false)}
+                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 rounded-xl text-sm transition-colors"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-bold py-2.5 rounded-xl text-sm transition-colors flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20"
+                >
+                  <Send className="w-4 h-4" /> Kirim Sekarang
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -586,6 +833,226 @@ export default function AdminDashboard() {
                 <div className="text-center py-12 text-slate-500 bg-slate-900 border border-slate-800 rounded-2xl">
                   <Database className="w-12 h-12 mx-auto mb-4 opacity-30" />
                   <p>Tidak ada kotak masuk yang ditemukan.</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ════════ TAB: TELEGRAM USERS ════════════════════════════ */}
+        {activeTab === 'telegram_users' && (
+          <div className="space-y-6">
+            {/* Stat Cards */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="bg-slate-900 p-5 rounded-2xl border border-slate-800">
+                <p className="text-slate-400 font-bold mb-1 text-xs sm:text-sm flex items-center gap-1.5">
+                  <Users className="w-4 h-4 text-cyan-400" /> Total User
+                </p>
+                <p className="text-3xl sm:text-4xl font-black text-white">{data.telegramUsers?.all?.length || 0}</p>
+              </div>
+              <div className="bg-slate-900 p-5 rounded-2xl border border-amber-900/30">
+                <p className="text-amber-400 font-bold mb-1 text-xs sm:text-sm flex items-center gap-1.5">
+                  <Clock className="w-4 h-4 text-amber-400" /> Menunggu
+                </p>
+                <p className="text-3xl sm:text-4xl font-black text-amber-400">{data.telegramUsers?.pending?.length || 0}</p>
+              </div>
+              <div className="bg-slate-900 p-5 rounded-2xl border border-emerald-900/30">
+                <p className="text-emerald-400 font-bold mb-1 text-xs sm:text-sm flex items-center gap-1.5">
+                  <UserCheck className="w-4 h-4 text-emerald-400" /> Aktif
+                </p>
+                <p className="text-3xl sm:text-4xl font-black text-emerald-400">{data.telegramUsers?.approved?.length || 0}</p>
+              </div>
+              <div className="bg-slate-900 p-5 rounded-2xl border border-red-900/30">
+                <p className="text-red-400 font-bold mb-1 text-xs sm:text-sm flex items-center gap-1.5">
+                  <UserX className="w-4 h-4 text-red-400" /> Diblokir
+                </p>
+                <p className="text-3xl sm:text-4xl font-black text-red-400">{data.telegramUsers?.banned?.length || 0}</p>
+              </div>
+            </div>
+
+            {/* Action Bar & Controls */}
+            <div className="bg-slate-900 p-5 rounded-2xl border border-slate-800 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => setIsAddUserModalOpen(true)}
+                    className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 transition-colors shadow-lg shadow-cyan-900/20"
+                  >
+                    <UserPlus className="w-4 h-4" /> Tambah User
+                  </button>
+                  <button
+                    onClick={refreshData}
+                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2.5 rounded-xl font-bold text-sm flex items-center gap-1.5 transition-colors border border-slate-700"
+                  >
+                    <RefreshCcw className="w-4 h-4" /> Refresh
+                  </button>
+                </div>
+                <button
+                  onClick={toggleApprovalMode}
+                  className={`px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-2 transition-colors ${
+                    data.telegramUsers?.approvalMode !== false
+                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                      : 'bg-slate-800 text-slate-400 border border-slate-700'
+                  }`}
+                >
+                  {data.telegramUsers?.approvalMode !== false ? (
+                    <><CheckCircle className="w-4 h-4 text-emerald-400" /> Wajib Approval: AKTIF</>
+                  ) : (
+                    <><XCircle className="w-4 h-4 text-slate-400" /> Wajib Approval: NONAKTIF</>
+                  )}
+                </button>
+              </div>
+
+              {/* Search & Status Filters */}
+              <div className="flex flex-col sm:flex-row gap-3">
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={userSearchQuery}
+                    onChange={e => setUserSearchQuery(e.target.value)}
+                    placeholder="Cari user berdasarkan Nama, Username (@), atau ID Telegram..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 pl-10 pr-4 text-white text-sm focus:border-cyan-500 outline-none"
+                  />
+                </div>
+                <div className="flex gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 shrink-0 overflow-x-auto">
+                  <button
+                    onClick={() => setUserStatusFilter('all')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${userStatusFilter === 'all' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white'}`}
+                  >
+                    Semua ({data.telegramUsers?.all?.length || 0})
+                  </button>
+                  <button
+                    onClick={() => setUserStatusFilter('pending')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${userStatusFilter === 'pending' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'text-slate-400 hover:text-white'}`}
+                  >
+                    Menunggu ({data.telegramUsers?.pending?.length || 0})
+                  </button>
+                  <button
+                    onClick={() => setUserStatusFilter('approved')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${userStatusFilter === 'approved' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'text-slate-400 hover:text-white'}`}
+                  >
+                    Aktif ({data.telegramUsers?.approved?.length || 0})
+                  </button>
+                  <button
+                    onClick={() => setUserStatusFilter('banned')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${userStatusFilter === 'banned' ? 'bg-red-500/20 text-red-400 border border-red-500/30' : 'text-slate-400 hover:text-white'}`}
+                  >
+                    Diblokir ({data.telegramUsers?.banned?.length || 0})
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Users List */}
+            <div className="space-y-3">
+              {((data.telegramUsers?.all || []) as any[])
+                .filter((u: any) => {
+                  if (userStatusFilter === 'pending' && u.status !== 'pending') return false;
+                  if (userStatusFilter === 'approved' && u.status !== 'approved') return false;
+                  if (userStatusFilter === 'banned' && u.status !== 'banned' && u.status !== 'rejected') return false;
+                  if (userSearchQuery.trim()) {
+                    const q = userSearchQuery.toLowerCase();
+                    const matchId = String(u.id).toLowerCase().includes(q);
+                    const matchName = String(u.name || '').toLowerCase().includes(q);
+                    const matchUsername = String(u.username || '').toLowerCase().includes(q);
+                    return matchId || matchName || matchUsername;
+                  }
+                  return true;
+                })
+                .map((u: any) => (
+                  <div key={u.id} className="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="flex items-start sm:items-center gap-3">
+                      <div className={`w-11 h-11 rounded-full flex items-center justify-center font-bold text-sm shrink-0 ${
+                        u.status === 'approved' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' :
+                        u.status === 'pending' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' :
+                        'bg-red-500/20 text-red-400 border border-red-500/30'
+                      }`}>
+                        {u.name ? u.name.substring(0, 2).toUpperCase() : 'TG'}
+                      </div>
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h4 className="font-bold text-white text-base">{u.name}</h4>
+                          {u.username && (
+                            <a
+                              href={`https://t.me/${u.username}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-cyan-400 text-xs font-semibold hover:underline"
+                            >
+                              @{u.username}
+                            </a>
+                          )}
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+                            u.status === 'approved' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                            u.status === 'pending' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20 animate-pulse' :
+                            'bg-red-500/10 text-red-400 border border-red-500/20'
+                          }`}>
+                            {u.status === 'approved' ? '🟢 Aktif' : u.status === 'pending' ? '⏳ Menunggu Persetujuan' : '🔴 Diblokir'}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400 mt-1 font-mono">
+                          <span>ID: <b className="text-white">{u.id}</b></span>
+                          {u.emails && u.emails.length > 0 && (
+                            <span>• 📬 <b>{u.emails.length}</b> email aktif ({u.emails[0]})</span>
+                          )}
+                          {u.requestedAt && (
+                            <span>• 🕒 {new Date(u.requestedAt).toLocaleDateString('id-ID')}</span>
+                          )}
+                        </div>
+                        {u.notes && (
+                          <p className="text-xs text-slate-500 mt-1 italic">Catatan: {u.notes}</p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="flex flex-wrap items-center gap-2 self-end md:self-center">
+                      {u.status === 'pending' && (
+                        <button
+                          onClick={() => approveTelegramUser(u.id)}
+                          className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors shadow-lg shadow-emerald-900/20"
+                        >
+                          <UserCheck className="w-3.5 h-3.5" /> Setujui
+                        </button>
+                      )}
+                      {u.status === 'approved' && (
+                        <button
+                          onClick={() => banTelegramUser(u.id)}
+                          className="bg-slate-800 hover:bg-red-500/20 text-slate-300 hover:text-red-400 border border-slate-700 hover:border-red-500/30 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors"
+                        >
+                          <Ban className="w-3.5 h-3.5" /> Blokir
+                        </button>
+                      )}
+                      {(u.status === 'banned' || u.status === 'rejected') && (
+                        <button
+                          onClick={() => unbanTelegramUser(u.id)}
+                          className="bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 border border-emerald-500/30 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" /> Buka Blokir
+                        </button>
+                      )}
+                      <button
+                        onClick={() => { setDmTargetUser(u); setIsDmModalOpen(true); }}
+                        className="bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/30 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors"
+                      >
+                        <MessageSquare className="w-3.5 h-3.5" /> Kirim DM
+                      </button>
+                      <button
+                        onClick={() => deleteTelegramUser(u.id)}
+                        className="bg-slate-800 hover:bg-red-600 text-slate-400 hover:text-white p-2 rounded-xl text-xs transition-colors"
+                        title="Hapus Permanen User"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+              {(!data.telegramUsers?.all || data.telegramUsers.all.length === 0) && (
+                <div className="text-center py-12 text-slate-500 bg-slate-900 border border-slate-800 rounded-2xl">
+                  <Users className="w-12 h-12 mx-auto mb-4 opacity-30" />
+                  <p>Belum ada pengguna Telegram yang terdaftar.</p>
                 </div>
               )}
             </div>

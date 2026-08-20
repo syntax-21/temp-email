@@ -107,8 +107,7 @@ export async function checkUserStatus(
   chatId: number | string,
   ctxUser?: any,
   fallbackAdminId?: string
-): Promise<{ status: 'approved' | 'pending' | 'rejected'; isNew: boolean }> {
-  // Admin is ALWAYS approved and whitelisted immediately
+): Promise<{ status: 'approved' | 'pending' | 'banned' | 'rejected'; isNew: boolean }> {
   const isAdmin = await isUserAdmin(chatId, fallbackAdminId);
   if (isAdmin) {
     try {
@@ -119,18 +118,25 @@ export async function checkUserStatus(
     return { status: 'approved', isNew: false };
   }
 
-  // Check if mandatory approval mode is enabled (default: true)
   const approvalMode = (await kv.get('settings:approval_mode')) !== false;
+  const existingStatus = (await kv.get(`bot_user_status:${chatId}`)) as string;
+
+  if (existingStatus === 'banned' || existingStatus === 'rejected') {
+    return { status: 'banned', isNew: false };
+  }
+
+  if (existingStatus === 'approved' || existingStatus === 'pending') {
+    return { status: existingStatus as any, isNew: false };
+  }
+
   if (!approvalMode) {
+    await kv.set(`bot_user_status:${chatId}`, 'approved');
+    await kv.sadd('bot_approved_users', String(chatId));
+    await kv.sadd('bot_all_users', String(chatId));
     return { status: 'approved', isNew: false };
   }
 
-  const existingStatus = (await kv.get(`bot_user_status:${chatId}`)) as string;
-  if (existingStatus === 'approved' || existingStatus === 'pending' || existingStatus === 'rejected') {
-    return { status: existingStatus, isNew: false };
-  }
-
-  // Brand new user -> set to pending and save profile
+  // Brand new user -> set to pending
   const name = ctxUser ? `${ctxUser.first_name || ''} ${ctxUser.last_name || ''}`.trim() || 'Pengguna Telegram' : 'Pengguna Telegram';
   const username = ctxUser?.username || '';
 
@@ -261,12 +267,18 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
       const chatId = ctx.chat.id;
       const isAdmin = await isUserAdmin(chatId, adminId);
 
+      if (isAdmin) {
+        await kv.set(`bot_user_status:${chatId}`, 'approved');
+        await kv.sadd('bot_approved_users', String(chatId));
+        await kv.srem('bot_pending_users', String(chatId));
+      }
+
       // Check User Approval Status
       const { status, isNew } = await checkUserStatus(chatId, ctx.from, adminId);
 
-      if (status === 'rejected') {
+      if (status === 'banned' || status === 'rejected') {
         return ctx.reply(
-          `⛔ <b>Akses Ditolak</b>\n\n` +
+          `⛔ <b>Akses Ditolak / Akun Diblokir</b>\n\n` +
           `Akun Anda belum diizinkan atau telah diblokir oleh Admin untuk menggunakan Temp Mail Bot ini.`,
           { parse_mode: 'HTML' }
         );
@@ -276,7 +288,6 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
         const name = `${ctx.from?.first_name || ''} ${ctx.from?.last_name || ''}`.trim() || 'Pengguna';
         const username = ctx.from?.username ? `@${ctx.from.username}` : '(Tidak ada username)';
 
-        // 1. Reply to user
         await ctx.reply(
           `👋 <b>Halo, ${escapeHtml(name)}!</b>\n\n` +
           `🔐 <b>Verifikasi Akses Diperlukan</b>\n` +
@@ -286,11 +297,10 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
           { parse_mode: 'HTML' }
         );
 
-        // 2. Notify Admin if brand new request (and not admin himself)
         if (isNew && !isAdmin) {
           const rawAdminId = (await kv.get('telegram:admin_id')) ?? adminId ?? process.env.TELEGRAM_ADMIN_ID;
           const currentAdminId = rawAdminId ? String(rawAdminId).trim() : '';
-          
+
           if (currentAdminId && currentAdminId !== String(chatId).trim()) {
             const approvalKb = new InlineKeyboard()
               .text('✅ Setujui Akses', `admin_approve_user:${chatId}`)
@@ -321,7 +331,6 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
       // Approved User Flow
       const startPayload = ctx.match?.trim() || '';
 
-      // Deep link sync from web
       if (startPayload) {
         let targetEmail = '';
         if (startPayload.startsWith('sync_')) {
@@ -358,7 +367,6 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
         }
       }
 
-      // Default start flow for approved user
       let activeEmail = await getActiveEmail(chatId);
       if (!activeEmail) {
         const domains = await getSystemDomains(configuredDomain);
@@ -495,8 +503,8 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
 
     // If not approved, block standard usage
     if (!isAdmin && status !== 'approved') {
-      if (status === 'rejected') {
-        return ctx.reply('⛔ Akses Anda telah ditolak oleh Admin.');
+      if (status === 'banned' || status === 'rejected') {
+        return ctx.reply('⛔ Akses Anda telah diblokir oleh Admin.');
       }
       return ctx.reply('⏳ Permintaan akses Anda masih menunggu persetujuan dari Admin.');
     }
@@ -538,7 +546,7 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     }
 
     // 2. Check Interactive Input States
-    const state = await kv.get(`bot_state:${chatId}`);
+    const state = (await kv.get(`bot_state:${chatId}`)) as string;
 
     // State: User Custom Prefix
     if (state === 'awaiting_custom_prefix') {
@@ -568,6 +576,99 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
       await kv.del(`bot_state:${chatId}`);
 
       return showDashboard(ctx, newEmail, false, `✅ <b>Email kustom berhasil dibuat!</b>`);
+    }
+
+    // State: Admin Add User Manual
+    if (state === 'admin_awaiting_add_user' && isAdmin) {
+      await kv.del(`bot_state:${chatId}`);
+      const parts = text.split(' ');
+      const targetId = parts[0]?.trim();
+      const targetName = parts.slice(1).join(' ').trim() || `User ${targetId}`;
+
+      if (!targetId || isNaN(Number(targetId))) {
+        return ctx.reply('⚠️ ID Telegram tidak valid (harus angka). Coba ulangi dari menu kelola user.', {
+          reply_markup: new InlineKeyboard().text('🔙 Kembali ke Kelola User', 'admin_users'),
+        });
+      }
+
+      const userInfo = {
+        id: targetId,
+        name: targetName,
+        username: '',
+        requestedAt: new Date().toISOString(),
+        notes: 'Ditambahkan via Bot Admin'
+      };
+
+      await kv.set(`bot_user_info:${targetId}`, userInfo);
+      await kv.set(`bot_user_status:${targetId}`, 'approved');
+      await kv.sadd('bot_all_users', targetId);
+      await kv.sadd('bot_approved_users', targetId);
+      await kv.srem('bot_pending_users', targetId);
+      await kv.srem('bot_banned_users', targetId);
+
+      try {
+        await bot.api.sendMessage(
+          targetId,
+          `🎉 <b>Selamat! Akun Anda Telah Diaktifkan oleh Admin!</b>\n\n` +
+          `Anda sekarang dapat menggunakan Temp Mail Bot.\n` +
+          `Ketik <b>/start</b> untuk memulai!`,
+          { parse_mode: 'HTML' }
+        );
+      } catch {}
+
+      await ctx.reply(`✅ Pengguna <b>${escapeHtml(targetName)}</b> (ID: <code>${targetId}</code>) berhasil ditambahkan &amp; diaktifkan!`, {
+        parse_mode: 'HTML',
+      });
+      return showAdminUsersHub(ctx, false);
+    }
+
+    // State: Admin Search User
+    if (state === 'admin_awaiting_search_user' && isAdmin) {
+      await kv.del(`bot_state:${chatId}`);
+      const query = text.toLowerCase().replace(/^@/, '');
+      const allIds = ((await kv.smembers('bot_all_users')) || []) as string[];
+      let foundId = '';
+
+      for (const uid of allIds) {
+        if (uid === query) { foundId = uid; break; }
+        const info = ((await kv.get(`bot_user_info:${uid}`)) as any) || {};
+        if (info.username?.toLowerCase() === query || info.name?.toLowerCase().includes(query)) {
+          foundId = uid;
+          break;
+        }
+      }
+
+      if (foundId) {
+        return showAdminUserDetail(ctx, foundId, false);
+      } else {
+        return ctx.reply(`⚠️ Pengguna dengan kata kunci "<b>${escapeHtml(text)}</b>" tidak ditemukan.`, {
+          parse_mode: 'HTML',
+          reply_markup: new InlineKeyboard().text('🔙 Kembali ke Kelola User', 'admin_users'),
+        });
+      }
+    }
+
+    // State: Admin Send DM
+    if (state && state.startsWith('admin_awaiting_dm:') && isAdmin) {
+      const targetId = state.replace('admin_awaiting_dm:', '');
+      await kv.del(`bot_state:${chatId}`);
+
+      try {
+        await bot.api.sendMessage(
+          targetId,
+          `📩 <b>PESAN DARI ADMIN:</b>\n\n${escapeHtml(text)}`,
+          { parse_mode: 'HTML' }
+        );
+        await ctx.reply(`✅ Pesan berhasil terkirim ke user (ID: <code>${targetId}</code>)!`, {
+          parse_mode: 'HTML',
+          reply_markup: new InlineKeyboard().text('🔙 Kembali ke Detail User', `admin_user_detail:${targetId}`),
+        });
+      } catch (err: any) {
+        await ctx.reply(`❌ Gagal mengirim pesan ke user: ${err.message}`, {
+          reply_markup: new InlineKeyboard().text('🔙 Kembali ke Kelola User', 'admin_users'),
+        });
+      }
+      return;
     }
 
     // State: Admin Add Domain
@@ -821,9 +922,8 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     return sendHelpMessage(ctx, true);
   });
 
-  // ── ADMIN USER APPROVAL CALLBACKS ───────────────────────────────────────────
+  // ── ADMIN USER APPROVAL & MANAGEMENT CALLBACKS ──────────────────────────────
 
-  // Admin approves a user request
   bot.callbackQuery(/^admin_approve_user:(\d+)$/, async (ctx) => {
     const currentChatId = ctx.chat?.id;
     if (!currentChatId || !(await isUserAdmin(currentChatId, adminId))) {
@@ -834,13 +934,13 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     await kv.set(`bot_user_status:${targetChatId}`, 'approved');
     await kv.srem('bot_pending_users', targetChatId);
     await kv.srem('bot_rejected_users', targetChatId);
+    await kv.srem('bot_banned_users', targetChatId);
     await kv.sadd('bot_approved_users', targetChatId);
 
     const userInfo = ((await kv.get(`bot_user_info:${targetChatId}`)) as any) || { name: `User ${targetChatId}` };
 
     await ctx.answerCallbackQuery('✅ Akses pengguna disetujui!').catch(() => {});
 
-    // Update Admin Message
     try {
       await ctx.editMessageText(
         `✅ <b>PERMINTAAN DISETUJUI</b>\n\n` +
@@ -849,7 +949,6 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
       );
     } catch {}
 
-    // Send instant welcome notification to User
     try {
       await bot.api.sendMessage(
         targetChatId,
@@ -861,12 +960,9 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
           reply_markup: getPersistentKeyboard(false),
         }
       );
-    } catch (sendErr) {
-      console.error(`Could not send approval notice to user ${targetChatId}:`, sendErr);
-    }
+    } catch {}
   });
 
-  // Admin rejects a user request
   bot.callbackQuery(/^admin_reject_user:(\d+)$/, async (ctx) => {
     const currentChatId = ctx.chat?.id;
     if (!currentChatId || !(await isUserAdmin(currentChatId, adminId))) {
@@ -874,35 +970,131 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     }
 
     const targetChatId = ctx.match[1];
-    await kv.set(`bot_user_status:${targetChatId}`, 'rejected');
+    await kv.set(`bot_user_status:${targetChatId}`, 'banned');
     await kv.srem('bot_pending_users', targetChatId);
     await kv.srem('bot_approved_users', targetChatId);
-    await kv.sadd('bot_rejected_users', targetChatId);
+    await kv.sadd('bot_banned_users', targetChatId);
 
     const userInfo = ((await kv.get(`bot_user_info:${targetChatId}`)) as any) || { name: `User ${targetChatId}` };
 
-    await ctx.answerCallbackQuery('❌ Akses pengguna ditolak!').catch(() => {});
+    await ctx.answerCallbackQuery('❌ Akses pengguna ditolak / diblokir!').catch(() => {});
 
-    // Update Admin Message
     try {
       await ctx.editMessageText(
-        `❌ <b>PERMINTAAN DITOLAK</b>\n\n` +
-        `Pengguna <b>${escapeHtml(userInfo.name)}</b> (ID: <code>${targetChatId}</code>) telah <b>DITOLAK</b>.`,
+        `❌ <b>PENGGUNA DIBLOKIR / DITOLAK</b>\n\n` +
+        `Pengguna <b>${escapeHtml(userInfo.name)}</b> (ID: <code>${targetChatId}</code>) telah <b>DIBLOKIR</b>.`,
         { parse_mode: 'HTML' }
       );
     } catch {}
 
-    // Send rejection notice to User
     try {
       await bot.api.sendMessage(
         targetChatId,
-        `⛔ <b>Pemberitahuan</b>\n\n` +
-        `Maaf, permintaan akses Anda untuk menggunakan Temp Mail Bot telah <b>ditolak</b> oleh Admin.`,
+        `⛔ <b>Pemberitahuan</b>\n\nMaaf, akun Anda telah <b>diblokir</b> oleh Admin dari layanan Temp Mail Bot.`,
         { parse_mode: 'HTML' }
       );
-    } catch (sendErr) {
-      console.error(`Could not send rejection notice to user ${targetChatId}:`, sendErr);
+    } catch {}
+  });
+
+  bot.callbackQuery(/^admin_unban_user:(\d+)$/, async (ctx) => {
+    const currentChatId = ctx.chat?.id;
+    if (!currentChatId || !(await isUserAdmin(currentChatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
     }
+
+    const targetChatId = ctx.match[1];
+    await kv.set(`bot_user_status:${targetChatId}`, 'approved');
+    await kv.srem('bot_banned_users', targetChatId);
+    await kv.srem('bot_rejected_users', targetChatId);
+    await kv.srem('bot_pending_users', targetChatId);
+    await kv.sadd('bot_approved_users', targetChatId);
+
+    await ctx.answerCallbackQuery('♻️ Blokir dibuka!').catch(() => {});
+
+    try {
+      await bot.api.sendMessage(
+        targetChatId,
+        `♻️ <b>Pemberitahuan Pemulihan Akun</b>\n\n` +
+        `Blokir pada akun Anda telah <b>dibuka</b> oleh Admin. Ketik <b>/start</b> untuk melanjutkan.`,
+        { parse_mode: 'HTML' }
+      );
+    } catch {}
+
+    return showAdminUserDetail(ctx, targetChatId, true);
+  });
+
+  bot.callbackQuery(/^admin_user_detail:(\d+)$/, async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+    const targetChatId = ctx.match[1];
+    await ctx.answerCallbackQuery().catch(() => {});
+    return showAdminUserDetail(ctx, targetChatId, true);
+  });
+
+  bot.callbackQuery(/^admin_send_dm_prompt:(\d+)$/, async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+    const targetChatId = ctx.match[1];
+    await kv.set(`bot_state:${chatId}`, `admin_awaiting_dm:${targetChatId}`);
+    await ctx.answerCallbackQuery().catch(() => {});
+
+    const text =
+      `✉️ <b>Kirim Pesan ke User (ID: <code>${targetChatId}</code>)</b>\n\n` +
+      `Ketik pesan yang ingin Anda kirimkan langsung ke pengguna ini di bawah:`;
+
+    const kb = new InlineKeyboard().text('❌ Batal', `admin_user_detail:${targetChatId}`);
+    return ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
+  });
+
+  bot.callbackQuery(/^admin_delete_user_confirm:(\d+)$/, async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+    const targetChatId = ctx.match[1];
+    await ctx.answerCallbackQuery().catch(() => {});
+
+    const kb = new InlineKeyboard()
+      .text('⚠️ YA, HAPUS PERMANEN', `admin_do_delete_user:${targetChatId}`)
+      .row()
+      .text('❌ Batal', `admin_user_detail:${targetChatId}`);
+
+    const text =
+      `⚠️ <b>KONFIRMASI HAPUS PENGGUNA</b>\n\n` +
+      `Yakin ingin menghapus pengguna ID: <code>${targetChatId}</code> beserta seluruh kotak masuk &amp; alamat email sementaranya?`;
+
+    return ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
+  });
+
+  bot.callbackQuery(/^admin_do_delete_user:(\d+)$/, async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+    const targetChatId = ctx.match[1];
+
+    const emails = ((await kv.get(`bot_user_emails:${targetChatId}`)) as string[]) || [];
+    for (const email of emails) {
+      await kv.del(`inbox:${email.toLowerCase()}`);
+      await kv.srem(`bot_email_users:${email.toLowerCase()}`, targetChatId);
+    }
+
+    await kv.del(`bot_user_info:${targetChatId}`);
+    await kv.del(`bot_user_status:${targetChatId}`);
+    await kv.del(`bot_user_emails:${targetChatId}`);
+    await kv.del(`bot_active_email:${targetChatId}`);
+
+    await kv.srem('bot_all_users', targetChatId);
+    await kv.srem('bot_approved_users', targetChatId);
+    await kv.srem('bot_pending_users', targetChatId);
+    await kv.srem('bot_banned_users', targetChatId);
+
+    await ctx.answerCallbackQuery('Pengguna berhasil dihapus permanen').catch(() => {});
+    return showAdminUsersHub(ctx, true);
   });
 
   // ── ADMIN HUB CALLBACKS ─────────────────────────────────────────────────────
@@ -970,6 +1162,35 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     return showAdminUsersHub(ctx, true);
   });
 
+  bot.callbackQuery('admin_add_user_prompt', async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+    await kv.set(`bot_state:${chatId}`, 'admin_awaiting_add_user');
+    await ctx.answerCallbackQuery().catch(() => {});
+    const text =
+      `➕ <b>Tambah User Telegram Baru</b>\n\n` +
+      `Ketik ID Telegram dan Nama Pengguna (opsional).\n` +
+      `<i>Contoh: <code>123456789 Budi Pratama</code></i>`;
+    const kb = new InlineKeyboard().text('❌ Batal', 'admin_users');
+    return ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
+  });
+
+  bot.callbackQuery('admin_search_user_prompt', async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+    await kv.set(`bot_state:${chatId}`, 'admin_awaiting_search_user');
+    await ctx.answerCallbackQuery().catch(() => {});
+    const text =
+      `🔍 <b>Cari Pengguna</b>\n\n` +
+      `Ketik ID Telegram, Nama, atau Username (@) pengguna yang ingin dicari:`;
+    const kb = new InlineKeyboard().text('❌ Batal', 'admin_users');
+    return ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
+  });
+
   bot.callbackQuery('admin_toggle_approval_mode', async (ctx) => {
     const chatId = ctx.chat?.id;
     if (!chatId || !(await isUserAdmin(chatId, adminId))) {
@@ -998,6 +1219,15 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     }
     await ctx.answerCallbackQuery().catch(() => {});
     return showAdminApprovedUsers(ctx, true);
+  });
+
+  bot.callbackQuery('admin_view_banned_users', async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+    await ctx.answerCallbackQuery().catch(() => {});
+    return showAdminBannedUsers(ctx, true);
   });
 
   bot.callbackQuery('admin_domains', async (ctx) => {
@@ -1485,26 +1715,31 @@ async function showAdminPanel(ctx: any, isEdit: boolean = false) {
 
 // 2. Admin Users Hub
 async function showAdminUsersHub(ctx: any, isEdit: boolean = false) {
+  const allUsers = ((await kv.smembers('bot_all_users')) || []) as string[];
   const pendingUsers = ((await kv.smembers('bot_pending_users')) || []) as string[];
   const approvedUsers = ((await kv.smembers('bot_approved_users')) || []) as string[];
-  const rejectedUsers = ((await kv.smembers('bot_rejected_users')) || []) as string[];
+  const bannedUsers = ((await kv.smembers('bot_banned_users')) || []) as string[];
   const approvalMode = (await kv.get('settings:approval_mode')) !== false;
 
   let text =
     `👥 <b>MANAJEMEN PENGGUNA TELEGRAM BOT</b>\n\n` +
-    `🔐 <b>Wajib Konfirmasi Admin:</b> <b>${approvalMode ? '🟢 AKTIF (Setiap user baru wajib di-approve)' : '⚪ NONAKTIF (Semua bebas pakai)'}</b>\n\n` +
+    `🔐 <b>Wajib Konfirmasi Admin:</b> <b>${approvalMode ? '🟢 AKTIF (User baru wajib di-approve)' : '⚪ NONAKTIF (Semua bebas pakai)'}</b>\n\n` +
     `📊 <b>Data Pengguna:</b>\n` +
+    `• Total Terdaftar: <b>${allUsers.length}</b> user\n` +
     `• ⏳ Menunggu Konfirmasi: <b>${pendingUsers.length}</b> user\n` +
-    `• ✅ Disetujui (Approved): <b>${approvedUsers.length}</b> user\n` +
-    `• ⛔ Ditolak (Rejected): <b>${rejectedUsers.length}</b> user\n\n` +
-    `Pilih aksi di bawah ini:`;
+    `• ✅ Disetujui (Aktif): <b>${approvedUsers.length}</b> user\n` +
+    `• ⛔ Diblokir (Banned): <b>${bannedUsers.length}</b> user\n\n` +
+    `Pilih menu di bawah ini:`;
 
   const kb = new InlineKeyboard()
-    .text(`⏳ Lihat Menunggu (${pendingUsers.length})`, 'admin_view_pending_users')
+    .text('➕ Tambah User Manual', 'admin_add_user_prompt')
+    .text('🔍 Cari Pengguna', 'admin_search_user_prompt')
     .row()
-    .text(`✅ Lihat Disetujui (${approvedUsers.length})`, 'admin_view_approved_users')
+    .text(`⏳ Menunggu (${pendingUsers.length})`, 'admin_view_pending_users')
+    .text(`✅ Aktif (${approvedUsers.length})`, 'admin_view_approved_users')
     .row()
-    .text(approvalMode ? '🔓 Matikan Wajib Approval' : '🔒 Aktifkan Wajib Approval', 'admin_toggle_approval_mode')
+    .text(`🚫 Diblokir (${bannedUsers.length})`, 'admin_view_banned_users')
+    .text(approvalMode ? '🔓 Matikan Approval' : '🔒 Aktifkan Approval', 'admin_toggle_approval_mode')
     .row()
     .text('🔙 Kembali ke Admin Hub', 'admin_hub');
 
@@ -1561,22 +1796,56 @@ async function showAdminApprovedUsers(ctx: any, isEdit: boolean = false) {
   const approvedUserIds = ((await kv.smembers('bot_approved_users')) || []) as string[];
 
   let text =
-    `✅ <b>PENGGUNA TERVERIFIKASI / DISETUJUI (${approvedUserIds.length})</b>\n\n`;
+    `✅ <b>PENGGUNA TERVERIFIKASI / AKTIF (${approvedUserIds.length})</b>\n\n` +
+    `<i>Pilih pengguna untuk melihat detail, kelola akses, atau kirim pesan:</i>\n\n`;
 
   const kb = new InlineKeyboard();
 
   if (approvedUserIds.length === 0) {
     text += `<i>Belum ada pengguna yang disetujui.</i>\n`;
   } else {
-    const maxShow = Math.min(approvedUserIds.length, 8);
+    const maxShow = Math.min(approvedUserIds.length, 10);
     for (let i = 0; i < maxShow; i++) {
       const uid = approvedUserIds[i];
       const info = ((await kv.get(`bot_user_info:${uid}`)) as any) || { name: `User ${uid}`, username: '' };
       text += `• <b>${escapeHtml(info.name)}</b> ${info.username ? `(@${escapeHtml(info.username)})` : ''} — <code>${uid}</code>\n`;
-      kb.text(`🚫 Cabut Akses (${info.name.substring(0, 10)})`, `admin_reject_user:${uid}`).row();
+      kb.text(`👤 ${info.name.substring(0, 16)}`, `admin_user_detail:${uid}`).row();
     }
-    if (approvedUserIds.length > 8) {
-      text += `\n<i>...dan ${approvedUserIds.length - 8} pengguna lainnya.</i>\n`;
+    if (approvedUserIds.length > 10) {
+      text += `\n<i>...dan ${approvedUserIds.length - 10} pengguna lainnya. Gunakan menu Cari untuk menemukan user tertentu.</i>\n`;
+    }
+  }
+
+  kb.text('➕ Tambah User Manual', 'admin_add_user_prompt').row();
+  kb.text('🔙 Kembali ke Kelola User', 'admin_users');
+
+  try {
+    if (isEdit) {
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
+    } else {
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+    }
+  } catch {
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+  }
+}
+
+// 5. Admin Banned Users View
+async function showAdminBannedUsers(ctx: any, isEdit: boolean = false) {
+  const bannedUserIds = ((await kv.smembers('bot_banned_users')) || []) as string[];
+
+  let text =
+    `🚫 <b>PENGGUNA DIBLOKIR / BANNED (${bannedUserIds.length})</b>\n\n`;
+
+  const kb = new InlineKeyboard();
+
+  if (bannedUserIds.length === 0) {
+    text += `<i>Tidak ada pengguna yang diblokir saat ini.</i>\n`;
+  } else {
+    for (const uid of bannedUserIds) {
+      const info = ((await kv.get(`bot_user_info:${uid}`)) as any) || { name: `User ${uid}`, username: '' };
+      text += `• <b>${escapeHtml(info.name)}</b> (ID: <code>${uid}</code>)\n`;
+      kb.text(`♻️ Buka Blokir (${info.name.substring(0, 10)})`, `admin_unban_user:${uid}`).row();
     }
   }
 
@@ -1593,7 +1862,59 @@ async function showAdminApprovedUsers(ctx: any, isEdit: boolean = false) {
   }
 }
 
-// 5. Admin Stats View
+// 6. Admin Single User Detail View
+async function showAdminUserDetail(ctx: any, targetId: string, isEdit: boolean = false) {
+  const info = ((await kv.get(`bot_user_info:${targetId}`)) as any) || { name: `User ${targetId}`, username: '' };
+  const status = (await kv.get(`bot_user_status:${targetId}`)) || 'unknown';
+  const emails = ((await kv.get(`bot_user_emails:${targetId}`)) as string[]) || [];
+
+  let text =
+    `👤 <b>DETAIL PENGGUNA TELEGRAM</b>\n\n` +
+    `• <b>Nama:</b> ${escapeHtml(info.name)}\n` +
+    `• <b>Username:</b> ${info.username ? `@${escapeHtml(info.username)}` : '<i>(Tidak ada username)</i>'}\n` +
+    `• <b>User ID:</b> <code>${targetId}</code>\n` +
+    `• <b>Status Akses:</b> <b>${status === 'approved' ? '🟢 Aktif / Disetujui' : status === 'banned' ? '🔴 Diblokir' : '⏳ Menunggu'}</b>\n` +
+    `• <b>Waktu Gabung:</b> ${info.requestedAt ? new Date(info.requestedAt).toLocaleString('id-ID') : '-'}\n` +
+    `• <b>Catatan:</b> ${escapeHtml(info.notes || '-')}\n\n` +
+    `📬 <b>Email Sementara Dimiliki (${emails.length}):</b>\n`;
+
+  if (emails.length === 0) {
+    text += `<i>Belum membuat email sementara.</i>\n`;
+  } else {
+    for (const e of emails) {
+      text += `• <code>${escapeHtml(e)}</code>\n`;
+    }
+  }
+
+  const kb = new InlineKeyboard();
+
+  if (status === 'approved') {
+    kb.text('🚫 Blokir User Ini', `admin_reject_user:${targetId}`).row();
+  } else if (status === 'banned' || status === 'rejected') {
+    kb.text('♻️ Buka Blokir (Aktifkan)', `admin_unban_user:${targetId}`).row();
+  } else if (status === 'pending') {
+    kb.text('✅ Setujui User', `admin_approve_user:${targetId}`)
+      .text('❌ Tolak / Blokir', `admin_reject_user:${targetId}`)
+      .row();
+  }
+
+  kb.text('✉️ Kirim Pesan DM', `admin_send_dm_prompt:${targetId}`)
+    .text('🗑 Hapus Permanen', `admin_delete_user_confirm:${targetId}`)
+    .row();
+  kb.text('🔙 Kembali ke Kelola User', 'admin_users');
+
+  try {
+    if (isEdit) {
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
+    } else {
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+    }
+  } catch {
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+  }
+}
+
+// 7. Admin Stats View
 async function showAdminStats(ctx: any, isEdit: boolean = false) {
   const keys = await kv.keys('inbox:*');
   const totalEmailsRecv = (await kv.get('stats:emails_received')) || 0;
@@ -1639,7 +1960,7 @@ async function showAdminStats(ctx: any, isEdit: boolean = false) {
   }
 }
 
-// 6. Admin Inboxes Monitor View
+// 8. Admin Inboxes Monitor View
 async function showAdminInboxes(ctx: any, page: number = 0, isEdit: boolean = false) {
   const keys = ((await kv.keys('inbox:*')) || []) as string[];
   const pageSize = 6;
@@ -1688,7 +2009,7 @@ async function showAdminInboxes(ctx: any, page: number = 0, isEdit: boolean = fa
   }
 }
 
-// 7. Admin Domains View
+// 9. Admin Domains View
 async function showAdminDomains(ctx: any, isEdit: boolean = false) {
   const customDomains = ((await kv.smembers('domains')) || []) as string[];
 
@@ -1725,7 +2046,7 @@ async function showAdminDomains(ctx: any, isEdit: boolean = false) {
   }
 }
 
-// 8. Admin Security View
+// 10. Admin Security View
 async function showAdminSecurity(ctx: any, isEdit: boolean = false) {
   const bannedEmails = ((await kv.smembers('banned_emails')) || []) as string[];
   const bannedIps = ((await kv.smembers('banned_ips')) || []) as string[];
@@ -1763,7 +2084,7 @@ async function showAdminSecurity(ctx: any, isEdit: boolean = false) {
   }
 }
 
-// 9. Admin Logs View
+// 11. Admin Logs View
 async function showAdminLogs(ctx: any, isEdit: boolean = false) {
   const logs = ((await kv.lrange('system_logs', 0, 7)) || []) as any[];
 

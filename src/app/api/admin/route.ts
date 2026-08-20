@@ -183,24 +183,52 @@ export async function GET(request: Request) {
     const systemLogs = (await kv.lrange('system_logs', 0, 299)) || [];
 
     // Telegram Users Data
+    const allUserIds = (await kv.smembers('bot_all_users')) || [];
     const pendingUserIds = (await kv.smembers('bot_pending_users')) || [];
     const approvedUserIds = (await kv.smembers('bot_approved_users')) || [];
+    const bannedUserIds = (await kv.smembers('bot_banned_users')) || [];
     const rejectedUserIds = (await kv.smembers('bot_rejected_users')) || [];
     const approvalMode = (await kv.get('settings:approval_mode')) !== false;
 
-    const fetchUserInfo = async (ids: string[], status: string) => {
-      return Promise.all(
-        ids.map(async (id) => {
-          const info = ((await kv.get(`bot_user_info:${id}`)) as any) || { id, name: `User ${id}`, username: '', requestedAt: '' };
-          return { ...info, status };
-        })
-      );
-    };
+    // Combine all unique IDs
+    const uniqueIds = Array.from(new Set([
+      ...(allUserIds as string[]),
+      ...(pendingUserIds as string[]),
+      ...(approvedUserIds as string[]),
+      ...(bannedUserIds as string[]),
+      ...(rejectedUserIds as string[])
+    ]));
+
+    const usersList = await Promise.all(
+      uniqueIds.map(async (id) => {
+        const info = ((await kv.get(`bot_user_info:${id}`)) as any) || {};
+        const status = (await kv.get(`bot_user_status:${id}`)) || (
+          (bannedUserIds as string[]).includes(id) ? 'banned' :
+          (rejectedUserIds as string[]).includes(id) ? 'rejected' :
+          (pendingUserIds as string[]).includes(id) ? 'pending' :
+          (approvedUserIds as string[]).includes(id) ? 'approved' : 'pending'
+        );
+        const emails = ((await kv.get(`bot_user_emails:${id}`)) as string[]) || [];
+        const activeEmail = (await kv.get(`bot_active_email:${id}`)) || (emails[0] || '');
+
+        return {
+          id,
+          name: info.name || `User ${id}`,
+          username: info.username || '',
+          status,
+          emails,
+          activeEmail,
+          requestedAt: info.requestedAt || info.createdAt || '',
+          notes: info.notes || ''
+        };
+      })
+    );
 
     const telegramUsers = {
-      pending: await fetchUserInfo(pendingUserIds as string[], 'pending'),
-      approved: await fetchUserInfo(approvedUserIds as string[], 'approved'),
-      rejected: await fetchUserInfo(rejectedUserIds as string[], 'rejected'),
+      all: usersList,
+      pending: usersList.filter(u => u.status === 'pending'),
+      approved: usersList.filter(u => u.status === 'approved'),
+      banned: usersList.filter(u => u.status === 'banned' || u.status === 'rejected'),
       approvalMode
     };
 
@@ -526,12 +554,63 @@ export async function POST(request: Request) {
       }
 
       // ── TELEGRAM USER MANAGEMENT ACTIONS ─────────────────────────
+      case 'add_telegram_user':
+        if (value && (value.id || typeof value === 'string')) {
+          const chatId = (typeof value === 'object' ? value.id : value).toString().trim();
+          const name = (typeof value === 'object' && value.name) ? value.name.trim() : `User ${chatId}`;
+          const username = (typeof value === 'object' && value.username) ? value.username.trim().replace(/^@/, '') : '';
+          const status = (typeof value === 'object' && value.status) ? value.status : 'approved';
+          const notes = (typeof value === 'object' && value.notes) ? value.notes : 'Ditambahkan manual via admin web';
+
+          const userInfo = {
+            id: chatId,
+            name,
+            username,
+            requestedAt: new Date().toISOString(),
+            notes
+          };
+
+          await kv.set(`bot_user_info:${chatId}`, userInfo);
+          await kv.set(`bot_user_status:${chatId}`, status);
+          await kv.sadd('bot_all_users', chatId);
+
+          if (status === 'approved') {
+            await kv.sadd('bot_approved_users', chatId);
+            await kv.srem('bot_pending_users', chatId);
+            await kv.srem('bot_banned_users', chatId);
+            await kv.srem('bot_rejected_users', chatId);
+
+            try {
+              const botToken = ((await kv.get('telegram:bot_token')) as string) || process.env.TELEGRAM_BOT_TOKEN;
+              if (botToken) {
+                const tempBot = getBot(botToken, '', '');
+                await tempBot.api.sendMessage(
+                  chatId,
+                  `🎉 <b>Selamat! Akun Anda Telah Diaktifkan oleh Admin!</b>\n\n` +
+                  `Anda sekarang dapat menggunakan Temp Mail Bot secara penuh.\n` +
+                  `Ketik <b>/start</b> untuk mulai membuat email sementara!`,
+                  { parse_mode: 'HTML' }
+                );
+              }
+            } catch {}
+          } else if (status === 'banned') {
+            await kv.sadd('bot_banned_users', chatId);
+            await kv.srem('bot_approved_users', chatId);
+            await kv.srem('bot_pending_users', chatId);
+          }
+
+          await addLog('settings', `Admin menambahkan user Telegram: ${name} (ID: ${chatId})`);
+          return NextResponse.json({ success: true, message: `User Telegram ${name} (${chatId}) berhasil ditambahkan!` });
+        }
+        break;
+
       case 'approve_telegram_user':
         if (value) {
-          const chatId = value.toString();
+          const chatId = value.toString().trim();
           await kv.set(`bot_user_status:${chatId}`, 'approved');
           await kv.srem('bot_pending_users', chatId);
           await kv.srem('bot_rejected_users', chatId);
+          await kv.srem('bot_banned_users', chatId);
           await kv.sadd('bot_approved_users', chatId);
           
           try {
@@ -555,12 +634,16 @@ export async function POST(request: Request) {
         }
         break;
 
+      case 'ban_telegram_user':
       case 'reject_telegram_user':
         if (value) {
-          const chatId = value.toString();
-          await kv.set(`bot_user_status:${chatId}`, 'rejected');
+          const chatId = (typeof value === 'object' ? value.id : value).toString().trim();
+          const reason = (typeof value === 'object' && value.reason) ? value.reason : 'Pelanggaran aturan / spam';
+
+          await kv.set(`bot_user_status:${chatId}`, 'banned');
           await kv.srem('bot_pending_users', chatId);
           await kv.srem('bot_approved_users', chatId);
+          await kv.sadd('bot_banned_users', chatId);
           await kv.sadd('bot_rejected_users', chatId);
           
           try {
@@ -569,16 +652,92 @@ export async function POST(request: Request) {
               const tempBot = getBot(botToken, '', '');
               await tempBot.api.sendMessage(
                 chatId,
-                `⛔ <b>Pemberitahuan</b>\n\nMaaf, permintaan akses Anda untuk menggunakan Temp Mail Bot telah <b>ditolak</b> oleh Admin.`,
+                `⛔ <b>Pemberitahuan Pemblokiran Akun</b>\n\n` +
+                `Akun Telegram Anda telah <b>DIBLOKIR</b> dari layanan Temp Mail Bot oleh Admin.\n` +
+                `📌 <b>Alasan:</b> ${reason}`,
                 { parse_mode: 'HTML' }
               );
             }
           } catch (notifyErr) {
-            console.error('Failed to notify rejected user:', notifyErr);
+            console.error('Failed to notify banned user:', notifyErr);
           }
 
-          await addLog('settings', `Admin menolak/memblokir user Telegram ID: ${chatId}`);
-          return NextResponse.json({ success: true, message: `User Telegram ${chatId} berhasil ditolak!` });
+          await addLog('settings', `Admin memblokir user Telegram ID: ${chatId}`);
+          return NextResponse.json({ success: true, message: `User Telegram ${chatId} berhasil diblokir!` });
+        }
+        break;
+
+      case 'unban_telegram_user':
+        if (value) {
+          const chatId = value.toString().trim();
+          await kv.set(`bot_user_status:${chatId}`, 'approved');
+          await kv.srem('bot_banned_users', chatId);
+          await kv.srem('bot_rejected_users', chatId);
+          await kv.srem('bot_pending_users', chatId);
+          await kv.sadd('bot_approved_users', chatId);
+
+          try {
+            const botToken = ((await kv.get('telegram:bot_token')) as string) || process.env.TELEGRAM_BOT_TOKEN;
+            if (botToken) {
+              const tempBot = getBot(botToken, '', '');
+              await tempBot.api.sendMessage(
+                chatId,
+                `♻️ <b>Pemberitahuan Pemulihan Akun</b>\n\n` +
+                `Blokir pada akun Telegram Anda telah <b>DIBUKA</b> oleh Admin. Anda sekarang dapat menggunakan bot kembali.\n` +
+                `Ketik <b>/start</b> untuk melanjutkan.`,
+                { parse_mode: 'HTML' }
+              );
+            }
+          } catch {}
+
+          await addLog('settings', `Admin membuka blokir user Telegram ID: ${chatId}`);
+          return NextResponse.json({ success: true, message: `Blokir user Telegram ${chatId} berhasil dibuka!` });
+        }
+        break;
+
+      case 'delete_telegram_user':
+        if (value) {
+          const chatId = value.toString().trim();
+          const emails = ((await kv.get(`bot_user_emails:${chatId}`)) as string[]) || [];
+
+          for (const email of emails) {
+            await kv.del(`inbox:${email.toLowerCase()}`);
+            await kv.srem(`bot_email_users:${email.toLowerCase()}`, chatId);
+          }
+
+          await kv.del(`bot_user_info:${chatId}`);
+          await kv.del(`bot_user_status:${chatId}`);
+          await kv.del(`bot_user_emails:${chatId}`);
+          await kv.del(`bot_active_email:${chatId}`);
+          await kv.del(`bot_state:${chatId}`);
+
+          await kv.srem('bot_all_users', chatId);
+          await kv.srem('bot_approved_users', chatId);
+          await kv.srem('bot_pending_users', chatId);
+          await kv.srem('bot_banned_users', chatId);
+          await kv.srem('bot_rejected_users', chatId);
+
+          await addLog('settings', `Admin menghapus user Telegram ID: ${chatId}`);
+          return NextResponse.json({ success: true, message: `User Telegram ${chatId} berhasil dihapus permanen!` });
+        }
+        break;
+
+      case 'send_telegram_user_message':
+        if (value && value.id && value.message) {
+          const chatId = value.id.toString().trim();
+          const msg = value.message.trim();
+          const botToken = ((await kv.get('telegram:bot_token')) as string) || process.env.TELEGRAM_BOT_TOKEN;
+          if (!botToken) {
+            return NextResponse.json({ error: 'Bot Token belum dikonfigurasi!' }, { status: 400 });
+          }
+          const tempBot = getBot(botToken, '', '');
+          await tempBot.api.sendMessage(
+            chatId,
+            `📩 <b>PESAN DARI ADMIN:</b>\n\n${msg}`,
+            { parse_mode: 'HTML' }
+          );
+          await addLog('settings', `Admin mengirim pesan langsung ke user Telegram ID: ${chatId}`);
+          return NextResponse.json({ success: true, message: `Pesan berhasil dikirim ke user ${chatId}!` });
         }
         break;
 
