@@ -30,26 +30,22 @@ export function escapeHtml(str: string = ''): string {
 export function extractOtp(text: string = '', subject: string = ''): string | null {
   const combined = `${subject} \n ${text}`;
   
-  // 1. Specific keywords pattern (Kode verifikasi: 123456, OTP is: 1234, etc.)
   const keywordRegex = /(?:kode|code|otp|pin|verifikasi|verification|password|token|konfirmasi|confirm)[^0-9a-zA-Z\n]{1,15}([0-9]{4,8}|[A-Z0-9]{5,8})\b/i;
   const keywordMatch = combined.match(keywordRegex);
   if (keywordMatch && keywordMatch[1]) {
     return keywordMatch[1];
   }
 
-  // 2. Standalone 4 to 6 digit code in subject
   const subjectDigitMatch = subject.match(/\b([0-9]{4,6})\b/);
   if (subjectDigitMatch && subjectDigitMatch[1]) {
     return subjectDigitMatch[1];
   }
 
-  // 3. Standalone 6-digit number in text (very common for OTPs)
   const sixDigitMatch = text.match(/\b([0-9]{6})\b/);
   if (sixDigitMatch && sixDigitMatch[1]) {
     return sixDigitMatch[1];
   }
 
-  // 4. Standalone 4-digit number
   const fourDigitMatch = text.match(/\b([0-9]{4})\b/);
   if (fourDigitMatch && fourDigitMatch[1]) {
     return fourDigitMatch[1];
@@ -92,6 +88,58 @@ function getRandomPrefix(): string {
   return `${randomName.toLowerCase()}${randomSuffix}`;
 }
 
+async function isUserAdmin(chatId: number | string, fallbackAdminId?: string): Promise<boolean> {
+  try {
+    const configuredAdminId = ((await kv.get('telegram:admin_id')) as string) || fallbackAdminId || process.env.TELEGRAM_ADMIN_ID || '';
+    if (!configuredAdminId) return false;
+    return chatId.toString() === configuredAdminId.trim();
+  } catch {
+    return false;
+  }
+}
+
+// ─── USER APPROVAL & AUTH CHECKERS ───────────────────────────────────────────
+
+export async function checkUserStatus(
+  chatId: number | string,
+  ctxUser?: any,
+  fallbackAdminId?: string
+): Promise<{ status: 'approved' | 'pending' | 'rejected'; isNew: boolean }> {
+  // Admin is always approved
+  if (await isUserAdmin(chatId, fallbackAdminId)) {
+    return { status: 'approved', isNew: false };
+  }
+
+  // Check if mandatory approval mode is enabled (default: true)
+  const approvalMode = (await kv.get('settings:approval_mode')) !== false;
+  if (!approvalMode) {
+    return { status: 'approved', isNew: false };
+  }
+
+  const existingStatus = (await kv.get(`bot_user_status:${chatId}`)) as string;
+  if (existingStatus === 'approved' || existingStatus === 'pending' || existingStatus === 'rejected') {
+    return { status: existingStatus, isNew: false };
+  }
+
+  // Brand new user -> set to pending and save profile
+  const name = ctxUser ? `${ctxUser.first_name || ''} ${ctxUser.last_name || ''}`.trim() || 'Pengguna Telegram' : 'Pengguna Telegram';
+  const username = ctxUser?.username || '';
+
+  const userInfo = {
+    id: chatId.toString(),
+    username,
+    name,
+    requestedAt: new Date().toISOString()
+  };
+
+  await kv.set(`bot_user_info:${chatId}`, userInfo);
+  await kv.set(`bot_user_status:${chatId}`, 'pending');
+  await kv.sadd('bot_pending_users', chatId.toString());
+  await kv.sadd('bot_all_users', chatId.toString());
+
+  return { status: 'pending', isNew: true };
+}
+
 // ─── USER EMAIL STORAGE HELPERS ───────────────────────────────────────────────
 
 async function getUserEmails(chatId: number | string): Promise<string[]> {
@@ -123,7 +171,6 @@ async function getActiveEmail(chatId: number | string): Promise<string | null> {
 
 async function setActiveEmail(chatId: number | string, email: string): Promise<void> {
   await kv.set(`bot_active_email:${chatId}`, email);
-  // Also register reverse mapping for instant push notifications
   await kv.sadd(`bot_email_users:${email.toLowerCase()}`, chatId.toString());
 }
 
@@ -145,12 +192,18 @@ async function removeUserEmail(chatId: number | string, email: string): Promise<
 
 // ─── KEYBOARDS GENERATION ─────────────────────────────────────────────────────
 
-export function getPersistentKeyboard() {
-  return new Keyboard()
+export function getPersistentKeyboard(isAdmin: boolean = false) {
+  const kb = new Keyboard()
     .text('📬 Email Saya').text('➕ Buat Email').row()
-    .text('📥 Kotak Masuk').text('🌐 Ganti Domain').row()
-    .text('❓ Panduan & Bantuan')
-    .resized();
+    .text('📥 Kotak Masuk').text('🌐 Ganti Domain').row();
+  
+  if (isAdmin) {
+    kb.text('🛠 Panel Admin').text('❓ Panduan & Bantuan');
+  } else {
+    kb.text('❓ Panduan & Bantuan');
+  }
+
+  return kb.resized();
 }
 
 export function buildDashboardKeyboard(activeEmail: string | null, inboxCount: number) {
@@ -188,7 +241,7 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
 
   const bot = new Bot(token);
 
-  // Global Error Handler to prevent silent crashes
+  // Global Error Handler
   bot.catch((err) => {
     console.error(`Grammy bot error on update ${err.ctx.update.update_id}:`, err.error);
   });
@@ -197,9 +250,67 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
   bot.command('start', async (ctx) => {
     try {
       const chatId = ctx.chat.id;
+      const isAdmin = await isUserAdmin(chatId, adminId);
+
+      // Check User Approval Status
+      const { status, isNew } = await checkUserStatus(chatId, ctx.from, adminId);
+
+      if (status === 'rejected') {
+        return ctx.reply(
+          `⛔ <b>Akses Ditolak</b>\n\n` +
+          `Akun Anda belum diizinkan atau telah diblokir oleh Admin untuk menggunakan Temp Mail Bot ini.`,
+          { parse_mode: 'HTML' }
+        );
+      }
+
+      if (status === 'pending') {
+        const name = `${ctx.from?.first_name || ''} ${ctx.from?.last_name || ''}`.trim() || 'Pengguna';
+        const username = ctx.from?.username ? `@${ctx.from.username}` : '(Tidak ada username)';
+
+        // 1. Reply to user
+        await ctx.reply(
+          `👋 <b>Halo, ${escapeHtml(name)}!</b>\n\n` +
+          `🔐 <b>Verifikasi Akses Diperlukan</b>\n` +
+          `Untuk menjaga keamanan &amp; kualitas layanan, penggunaan bot ini memerlukan persetujuan dari Admin.\n\n` +
+          `📩 <b>Permintaan akses Anda telah dikirimkan ke Admin.</b>\n` +
+          `Mohon menunggu beberapa saat, Anda akan menerima notifikasi otomatis begitu disetujui!`,
+          { parse_mode: 'HTML' }
+        );
+
+        // 2. Notify Admin if brand new request
+        if (isNew) {
+          const currentAdminId = ((await kv.get('telegram:admin_id')) as string) || adminId || process.env.TELEGRAM_ADMIN_ID;
+          if (currentAdminId) {
+            const approvalKb = new InlineKeyboard()
+              .text('✅ Setujui Akses', `admin_approve_user:${chatId}`)
+              .text('❌ Tolak Akses', `admin_reject_user:${chatId}`);
+
+            try {
+              await bot.api.sendMessage(
+                currentAdminId,
+                `🔔 <b>PERMINTAAN AKSES PENGGUNA BARU</b>\n\n` +
+                `👤 <b>Nama:</b> ${escapeHtml(name)}\n` +
+                `🏷️ <b>Username:</b> ${escapeHtml(username)}\n` +
+                `🆔 <b>User ID:</b> <code>${chatId}</code>\n` +
+                `🕒 <b>Waktu:</b> ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB\n\n` +
+                `Silakan tentukan persetujuan:`,
+                {
+                  parse_mode: 'HTML',
+                  reply_markup: approvalKb,
+                }
+              );
+            } catch (err) {
+              console.error('Failed to notify admin of new user approval request:', err);
+            }
+          }
+        }
+        return;
+      }
+
+      // Approved User Flow
       const startPayload = ctx.match?.trim() || '';
 
-      // Handle deep-link sync from Web (e.g. /start sync_alex_breonline_biz_id or /start email@domain)
+      // Deep link sync from web
       if (startPayload) {
         let targetEmail = '';
         if (startPayload.startsWith('sync_')) {
@@ -215,7 +326,7 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
           const existingEmails = await getUserEmails(chatId);
           if (!existingEmails.includes(targetEmail)) {
             if (existingEmails.length >= 5) {
-              existingEmails.pop(); // keep max 5 emails
+              existingEmails.pop();
             }
             existingEmails.unshift(targetEmail);
             await saveUserEmails(chatId, existingEmails);
@@ -229,14 +340,14 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
             `🔔 <b>Notifikasi Instan Aktif:</b> Anda akan menerima notifikasi otomatis begitu ada email/kode OTP masuk!`,
             {
               parse_mode: 'HTML',
-              reply_markup: getPersistentKeyboard(),
+              reply_markup: getPersistentKeyboard(isAdmin),
             }
           );
           return showDashboard(ctx, targetEmail, false);
         }
       }
 
-      // Default start flow
+      // Default start flow for approved user
       let activeEmail = await getActiveEmail(chatId);
       if (!activeEmail) {
         const domains = await getSystemDomains(configuredDomain);
@@ -254,10 +365,11 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
         `⚡ <b>Fitur Utama:</b>\n` +
         `• Deteksi otomatis kode OTP &amp; tombol salin instan\n` +
         `• Notifikasi real-time email masuk langsung ke Telegram\n` +
-        `• Kelola hingga 5 email sekaligus &amp; kustom nama`,
+        `• Kelola hingga 5 email sekaligus &amp; kustom nama` +
+        `${isAdmin ? '\n\n👑 <i>Mode Admin Aktif: Buka menu admin via /admin</i>' : ''}`,
         {
           parse_mode: 'HTML',
-          reply_markup: getPersistentKeyboard(),
+          reply_markup: getPersistentKeyboard(isAdmin),
         }
       );
 
@@ -275,6 +387,10 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
   // ── COMMAND /myemail & /emails ──────────────────────────────────────────────
   bot.command(['myemail', 'emails', 'me'], async (ctx) => {
     const chatId = ctx.chat.id;
+    const { status } = await checkUserStatus(chatId, ctx.from, adminId);
+    if (status !== 'approved') {
+      return ctx.reply('⚠️ Akses Anda masih menunggu persetujuan dari Admin.');
+    }
     const activeEmail = await getActiveEmail(chatId);
     return showDashboard(ctx, activeEmail, false);
   });
@@ -282,10 +398,15 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
   // ── COMMAND /inbox ──────────────────────────────────────────────────────────
   bot.command('inbox', async (ctx) => {
     const chatId = ctx.chat.id;
+    const { status } = await checkUserStatus(chatId, ctx.from, adminId);
+    if (status !== 'approved') {
+      return ctx.reply('⚠️ Akses Anda masih menunggu persetujuan dari Admin.');
+    }
     const activeEmail = await getActiveEmail(chatId);
     if (!activeEmail) {
+      const isAdmin = await isUserAdmin(chatId, adminId);
       return ctx.reply('⚠️ Anda belum memiliki email aktif. Buat email terlebih dahulu dengan perintah /new atau tombol di bawah.', {
-        reply_markup: getPersistentKeyboard(),
+        reply_markup: getPersistentKeyboard(isAdmin),
       });
     }
     return showInbox(ctx, activeEmail, false);
@@ -294,6 +415,10 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
   // ── COMMAND /new ────────────────────────────────────────────────────────────
   bot.command('new', async (ctx) => {
     const chatId = ctx.chat.id;
+    const { status } = await checkUserStatus(chatId, ctx.from, adminId);
+    if (status !== 'approved') {
+      return ctx.reply('⚠️ Akses Anda masih menunggu persetujuan dari Admin.');
+    }
     const domains = await getSystemDomains(configuredDomain);
     const prefDomain = ((await kv.get(`bot_selected_domain:${chatId}`)) as string) || domains[0];
     const prefix = getRandomPrefix();
@@ -310,6 +435,10 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
   // ── COMMAND /custom ─────────────────────────────────────────────────────────
   bot.command('custom', async (ctx) => {
     const chatId = ctx.chat.id;
+    const { status } = await checkUserStatus(chatId, ctx.from, adminId);
+    if (status !== 'approved') {
+      return ctx.reply('⚠️ Akses Anda masih menunggu persetujuan dari Admin.');
+    }
     await kv.set(`bot_state:${chatId}`, 'awaiting_custom_prefix');
     const domains = await getSystemDomains(configuredDomain);
     const prefDomain = ((await kv.get(`bot_selected_domain:${chatId}`)) as string) || domains[0];
@@ -328,13 +457,20 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
 
   // ── COMMAND /domain & /domains ──────────────────────────────────────────────
   bot.command(['domain', 'domains'], async (ctx) => {
+    const chatId = ctx.chat.id;
+    const { status } = await checkUserStatus(chatId, ctx.from, adminId);
+    if (status !== 'approved') {
+      return ctx.reply('⚠️ Akses Anda masih menunggu persetujuan dari Admin.');
+    }
     return showDomainSelector(ctx, false);
   });
 
   // ── COMMAND /admin ──────────────────────────────────────────────────────────
   bot.command('admin', async (ctx) => {
-    if (!adminId || ctx.from?.id.toString() !== adminId) {
-      return ctx.reply('⛔ Akses ditolak. Anda bukan admin.');
+    const chatId = ctx.chat.id;
+    const isAdmin = await isUserAdmin(chatId, adminId);
+    if (!isAdmin) {
+      return ctx.reply('⛔ Akses ditolak. ID Telegram Anda tidak terdaftar sebagai Admin di Web Panel.');
     }
     return showAdminPanel(ctx, false);
   });
@@ -343,6 +479,16 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
   bot.on('message:text', async (ctx) => {
     const chatId = ctx.chat.id;
     const text = ctx.message.text.trim();
+    const isAdmin = await isUserAdmin(chatId, adminId);
+    const { status } = await checkUserStatus(chatId, ctx.from, adminId);
+
+    // If not approved, block standard usage
+    if (!isAdmin && status !== 'approved') {
+      if (status === 'rejected') {
+        return ctx.reply('⛔ Akses Anda telah ditolak oleh Admin.');
+      }
+      return ctx.reply('⏳ Permintaan akses Anda masih menunggu persetujuan dari Admin.');
+    }
 
     // 1. Check Persistent Keyboard Buttons
     if (text === '📬 Email Saya') {
@@ -365,7 +511,7 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     if (text === '📥 Kotak Masuk') {
       const activeEmail = await getActiveEmail(chatId);
       if (!activeEmail) {
-        return ctx.reply('⚠️ Anda belum memiliki email aktif.', { reply_markup: getPersistentKeyboard() });
+        return ctx.reply('⚠️ Anda belum memiliki email aktif.', { reply_markup: getPersistentKeyboard(isAdmin) });
       }
       return showInbox(ctx, activeEmail, false);
     }
@@ -375,9 +521,15 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     if (text === '❓ Panduan & Bantuan') {
       return sendHelpMessage(ctx);
     }
+    if (text === '🛠 Panel Admin') {
+      if (!isAdmin) return ctx.reply('⛔ Akses ditolak.');
+      return showAdminPanel(ctx, false);
+    }
 
-    // 2. Check Interactive Input States (e.g. Custom Prefix)
+    // 2. Check Interactive Input States
     const state = await kv.get(`bot_state:${chatId}`);
+
+    // State: User Custom Prefix
     if (state === 'awaiting_custom_prefix') {
       const rawPrefix = text.toLowerCase().replace(/[^a-z0-9._-]/g, '');
 
@@ -387,7 +539,6 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
         });
       }
 
-      // Check reserved names
       const isReserved = await kv.sismember('reserved_names', rawPrefix);
       if (isReserved) {
         return ctx.reply('⚠️ Nama email ini dilarang oleh sistem (Reserved). Silakan ketik nama lain:', {
@@ -408,15 +559,76 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
       return showDashboard(ctx, newEmail, false, `✅ <b>Email kustom berhasil dibuat!</b>`);
     }
 
+    // State: Admin Add Domain
+    if (state === 'admin_awaiting_new_domain' && isAdmin) {
+      const domainInput = text.toLowerCase().trim().replace(/^https?:\/\//, '').replace(/\/$/, '');
+      if (!domainInput.includes('.')) {
+        return ctx.reply('⚠️ Format domain tidak valid (contoh: domainku.com). Ketik lagi:', {
+          reply_markup: new InlineKeyboard().text('❌ Batal', 'admin_cancel_state'),
+        });
+      }
+      await kv.sadd('domains', domainInput);
+      await kv.del(`bot_state:${chatId}`);
+      await ctx.reply(`✅ Domain <code>${escapeHtml(domainInput)}</code> berhasil ditambahkan ke sistem!`, {
+        parse_mode: 'HTML',
+      });
+      return showAdminDomains(ctx, false);
+    }
+
+    // State: Admin Add Reserved Name
+    if (state === 'admin_awaiting_new_reserved' && isAdmin) {
+      const nameInput = text.toLowerCase().trim();
+      await kv.sadd('reserved_names', nameInput);
+      await kv.del(`bot_state:${chatId}`);
+      await ctx.reply(`✅ Nama reserved <code>${escapeHtml(nameInput)}</code> berhasil disimpan!`, {
+        parse_mode: 'HTML',
+      });
+      return showAdminSecurity(ctx, false);
+    }
+
+    // State: Admin Ban Email
+    if (state === 'admin_awaiting_ban_email' && isAdmin) {
+      const emailInput = text.toLowerCase().trim();
+      await kv.sadd('banned_emails', emailInput);
+      await kv.del(`inbox:${emailInput}`);
+      await kv.del(`bot_state:${chatId}`);
+      await ctx.reply(`🚫 Email <code>${escapeHtml(emailInput)}</code> berhasil diblokir (banned) & inbox dibersihkan!`, {
+        parse_mode: 'HTML',
+      });
+      return showAdminSecurity(ctx, false);
+    }
+
+    // State: Admin Broadcast Message
+    if (state === 'admin_awaiting_broadcast' && isAdmin) {
+      await kv.del(`bot_state:${chatId}`);
+      const users = (await kv.smembers('bot_all_users')) as string[];
+      let sentCount = 0;
+      
+      await ctx.reply(`⏳ Memulai pengiriman siaran ke ${users.length} pengguna...`);
+      for (const u of users) {
+        try {
+          await bot.api.sendMessage(
+            u,
+            `📢 <b>PENGUMUMAN DARI ADMIN:</b>\n\n${escapeHtml(text)}`,
+            { parse_mode: 'HTML' }
+          );
+          sentCount++;
+        } catch {}
+      }
+      await ctx.reply(`✅ Siaran selesai! Berhasil terkirim ke <b>${sentCount}</b> dari ${users.length} pengguna.`, {
+        parse_mode: 'HTML',
+      });
+      return showAdminPanel(ctx, false);
+    }
+
     // Fallback info
     return ctx.reply('Gunakan tombol menu di bawah atau ketik /help untuk melihat opsi:', {
-      reply_markup: getPersistentKeyboard(),
+      reply_markup: getPersistentKeyboard(isAdmin),
     });
   });
 
-  // ── CALLBACK QUERY HANDLERS (INLINE INTERACTIONS) ───────────────────────────
+  // ── CALLBACK QUERY HANDLERS (USER INTERACTIONS) ─────────────────────────────
 
-  // Dashboard Refresh & View
   bot.callbackQuery(/^refresh_dashboard:(.+)$/, async (ctx) => {
     const email = ctx.match[1];
     await ctx.answerCallbackQuery('🔄 Memperbarui status...').catch(() => {});
@@ -431,7 +643,6 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     return showDashboard(ctx, activeEmail, true);
   });
 
-  // Generate Random Email
   bot.callbackQuery('action_random_email', async (ctx) => {
     const chatId = ctx.chat?.id;
     if (!chatId) return;
@@ -449,7 +660,6 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     return showDashboard(ctx, newEmail, true, `✨ <b>Email baru berhasil dibuat!</b>`);
   });
 
-  // Custom Prefix Prompt
   bot.callbackQuery('action_custom_email', async (ctx) => {
     const chatId = ctx.chat?.id;
     if (!chatId) return;
@@ -473,7 +683,6 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     }
   });
 
-  // Cancel any active input state
   bot.callbackQuery('action_cancel_state', async (ctx) => {
     const chatId = ctx.chat?.id;
     if (!chatId) return;
@@ -483,7 +692,6 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     return showDashboard(ctx, activeEmail, true);
   });
 
-  // Select Domain Flow
   bot.callbackQuery('action_select_domain', async (ctx) => {
     await ctx.answerCallbackQuery().catch(() => {});
     return showDomainSelector(ctx, true);
@@ -510,7 +718,6 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     return showDomainSelector(ctx, true);
   });
 
-  // List All User Emails (Multi-Email Manager - Screenshot 1 Style)
   bot.callbackQuery('action_list_emails', async (ctx) => {
     const chatId = ctx.chat?.id;
     if (!chatId) return;
@@ -518,7 +725,6 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     return showEmailList(ctx, true);
   });
 
-  // Switch Active Email
   bot.callbackQuery(/^select_email:(.+)$/, async (ctx) => {
     const chatId = ctx.chat?.id;
     if (!chatId) return;
@@ -528,7 +734,6 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     return showDashboard(ctx, targetEmail, true);
   });
 
-  // Delete Specific Email
   bot.callbackQuery(/^action_delete_email:(.+)$/, async (ctx) => {
     const chatId = ctx.chat?.id;
     if (!chatId) return;
@@ -563,16 +768,12 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     return showDashboard(ctx, nextActive, true, `🗑 <b>Email <code>${escapeHtml(emailToDelete)}</code> telah dihapus.</b>`);
   });
 
-  // ── INBOX & EMAIL READER (Screenshot 2 Style & Instant Reader) ──────────────
-
-  // View Inbox List
   bot.callbackQuery(/^view_inbox:(.+)$/, async (ctx) => {
     const email = ctx.match[1];
     await ctx.answerCallbackQuery('Memuat kotak masuk...').catch(() => {});
     return showInbox(ctx, email, true);
   });
 
-  // Read Single Message Detail
   bot.callbackQuery(/^read_email:(.+):(.+)$/, async (ctx) => {
     const email = ctx.match[1];
     const messageId = ctx.match[2];
@@ -580,7 +781,6 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     return showEmailDetail(ctx, email, messageId, true);
   });
 
-  // Delete Single Message
   bot.callbackQuery(/^del_msg:(.+):(.+)$/, async (ctx) => {
     const email = ctx.match[1];
     const messageId = ctx.match[2];
@@ -598,7 +798,6 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     return showInbox(ctx, email, true);
   });
 
-  // Clear Entire Inbox
   bot.callbackQuery(/^clear_inbox:(.+)$/, async (ctx) => {
     const email = ctx.match[1];
     await kv.del(`inbox:${email.toLowerCase()}`);
@@ -606,15 +805,109 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     return showInbox(ctx, email, true);
   });
 
-  // Help Action
   bot.callbackQuery('action_help', async (ctx) => {
     await ctx.answerCallbackQuery().catch(() => {});
     return sendHelpMessage(ctx, true);
   });
 
-  // Admin Actions
+  // ── ADMIN USER APPROVAL CALLBACKS ───────────────────────────────────────────
+
+  // Admin approves a user request
+  bot.callbackQuery(/^admin_approve_user:(\d+)$/, async (ctx) => {
+    const currentChatId = ctx.chat?.id;
+    if (!currentChatId || !(await isUserAdmin(currentChatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+
+    const targetChatId = ctx.match[1];
+    await kv.set(`bot_user_status:${targetChatId}`, 'approved');
+    await kv.srem('bot_pending_users', targetChatId);
+    await kv.srem('bot_rejected_users', targetChatId);
+    await kv.sadd('bot_approved_users', targetChatId);
+
+    const userInfo = ((await kv.get(`bot_user_info:${targetChatId}`)) as any) || { name: `User ${targetChatId}` };
+
+    await ctx.answerCallbackQuery('✅ Akses pengguna disetujui!').catch(() => {});
+
+    // Update Admin Message
+    try {
+      await ctx.editMessageText(
+        `✅ <b>PERMINTAAN DISETUJUI</b>\n\n` +
+        `Pengguna <b>${escapeHtml(userInfo.name)}</b> (ID: <code>${targetChatId}</code>) telah <b>DISETUJUI</b> dan dapat menggunakan bot secara penuh.`,
+        { parse_mode: 'HTML' }
+      );
+    } catch {}
+
+    // Send instant welcome notification to User
+    try {
+      await bot.api.sendMessage(
+        targetChatId,
+        `🎉 <b>Selamat! Permintaan Akses Anda Telah Disetujui Admin!</b>\n\n` +
+        `Anda sekarang dapat membuat email sementara, membaca kotak masuk, dan menerima notifikasi kode OTP secara langsung.\n\n` +
+        `Ketik <b>/start</b> atau gunakan menu di bawah untuk memulai!`,
+        {
+          parse_mode: 'HTML',
+          reply_markup: getPersistentKeyboard(false),
+        }
+      );
+    } catch (sendErr) {
+      console.error(`Could not send approval notice to user ${targetChatId}:`, sendErr);
+    }
+  });
+
+  // Admin rejects a user request
+  bot.callbackQuery(/^admin_reject_user:(\d+)$/, async (ctx) => {
+    const currentChatId = ctx.chat?.id;
+    if (!currentChatId || !(await isUserAdmin(currentChatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+
+    const targetChatId = ctx.match[1];
+    await kv.set(`bot_user_status:${targetChatId}`, 'rejected');
+    await kv.srem('bot_pending_users', targetChatId);
+    await kv.srem('bot_approved_users', targetChatId);
+    await kv.sadd('bot_rejected_users', targetChatId);
+
+    const userInfo = ((await kv.get(`bot_user_info:${targetChatId}`)) as any) || { name: `User ${targetChatId}` };
+
+    await ctx.answerCallbackQuery('❌ Akses pengguna ditolak!').catch(() => {});
+
+    // Update Admin Message
+    try {
+      await ctx.editMessageText(
+        `❌ <b>PERMINTAAN DITOLAK</b>\n\n` +
+        `Pengguna <b>${escapeHtml(userInfo.name)}</b> (ID: <code>${targetChatId}</code>) telah <b>DITOLAK</b>.`,
+        { parse_mode: 'HTML' }
+      );
+    } catch {}
+
+    // Send rejection notice to User
+    try {
+      await bot.api.sendMessage(
+        targetChatId,
+        `⛔ <b>Pemberitahuan</b>\n\n` +
+        `Maaf, permintaan akses Anda untuk menggunakan Temp Mail Bot telah <b>ditolak</b> oleh Admin.`,
+        { parse_mode: 'HTML' }
+      );
+    } catch (sendErr) {
+      console.error(`Could not send rejection notice to user ${targetChatId}:`, sendErr);
+    }
+  });
+
+  // ── ADMIN HUB CALLBACKS ─────────────────────────────────────────────────────
+
+  bot.callbackQuery('admin_hub', async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+    await ctx.answerCallbackQuery().catch(() => {});
+    return showAdminPanel(ctx, true);
+  });
+
   bot.callbackQuery('admin_toggle_maintenance', async (ctx) => {
-    if (!adminId || ctx.from?.id.toString() !== adminId) {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
       return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
     }
     const current = await kv.get('settings:maintenance');
@@ -628,11 +921,203 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     return showAdminPanel(ctx, true);
   });
 
-  bot.callbackQuery('admin_refresh_stats', async (ctx) => {
-    if (!adminId || ctx.from?.id.toString() !== adminId) {
+  bot.callbackQuery('admin_stats', async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
       return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
     }
-    await ctx.answerCallbackQuery('Statistik diperbarui').catch(() => {});
+    await ctx.answerCallbackQuery().catch(() => {});
+    return showAdminStats(ctx, true);
+  });
+
+  bot.callbackQuery('admin_inboxes', async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+    await ctx.answerCallbackQuery('Memuat kotak masuk server...').catch(() => {});
+    return showAdminInboxes(ctx, 0, true);
+  });
+
+  bot.callbackQuery(/^admin_inboxes_page:(\d+)$/, async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+    const page = parseInt(ctx.match[1], 10) || 0;
+    await ctx.answerCallbackQuery().catch(() => {});
+    return showAdminInboxes(ctx, page, true);
+  });
+
+  // User Management Menu
+  bot.callbackQuery('admin_users', async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+    await ctx.answerCallbackQuery().catch(() => {});
+    return showAdminUsersHub(ctx, true);
+  });
+
+  bot.callbackQuery('admin_toggle_approval_mode', async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+    const current = (await kv.get('settings:approval_mode')) !== false;
+    const next = !current;
+    await kv.set('settings:approval_mode', next);
+    await ctx.answerCallbackQuery(`Persetujuan Wajib ${next ? 'AKTIF' : 'NONAKTIF'}`).catch(() => {});
+    return showAdminUsersHub(ctx, true);
+  });
+
+  bot.callbackQuery('admin_view_pending_users', async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+    await ctx.answerCallbackQuery().catch(() => {});
+    return showAdminPendingUsers(ctx, true);
+  });
+
+  bot.callbackQuery('admin_view_approved_users', async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+    await ctx.answerCallbackQuery().catch(() => {});
+    return showAdminApprovedUsers(ctx, true);
+  });
+
+  bot.callbackQuery('admin_domains', async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+    await ctx.answerCallbackQuery().catch(() => {});
+    return showAdminDomains(ctx, true);
+  });
+
+  bot.callbackQuery('admin_add_domain_prompt', async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+    await kv.set(`bot_state:${chatId}`, 'admin_awaiting_new_domain');
+    await ctx.answerCallbackQuery().catch(() => {});
+    const text =
+      `🌐 <b>Tambah Domain Baru</b>\n\n` +
+      `Ketik nama domain yang ingin ditambahkan ke sistem (contoh: <code>domainku.com</code>):`;
+    const kb = new InlineKeyboard().text('❌ Batal', 'admin_cancel_state');
+    return ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
+  });
+
+  bot.callbackQuery(/^admin_delete_domain:(.+)$/, async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+    const domainToDelete = ctx.match[1];
+    await kv.srem('domains', domainToDelete);
+    await ctx.answerCallbackQuery(`Domain ${domainToDelete} dihapus`).catch(() => {});
+    return showAdminDomains(ctx, true);
+  });
+
+  bot.callbackQuery('admin_security', async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+    await ctx.answerCallbackQuery().catch(() => {});
+    return showAdminSecurity(ctx, true);
+  });
+
+  bot.callbackQuery('admin_add_reserved_prompt', async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+    await kv.set(`bot_state:${chatId}`, 'admin_awaiting_new_reserved');
+    await ctx.answerCallbackQuery().catch(() => {});
+    const text =
+      `🛡️ <b>Tambah Reserved Name</b>\n\n` +
+      `Ketik awalan email yang dilarang digunakan (contoh: <code>admin</code>, <code>support</code>):`;
+    const kb = new InlineKeyboard().text('❌ Batal', 'admin_cancel_state');
+    return ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
+  });
+
+  bot.callbackQuery('admin_ban_email_prompt', async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+    await kv.set(`bot_state:${chatId}`, 'admin_awaiting_ban_email');
+    await ctx.answerCallbackQuery().catch(() => {});
+    const text =
+      `🚫 <b>Blokir (Ban) Alamat Email</b>\n\n` +
+      `Ketik alamat email lengkap yang ingin diblokir (contoh: <code>spammer@domain.com</code>):`;
+    const kb = new InlineKeyboard().text('❌ Batal', 'admin_cancel_state');
+    return ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
+  });
+
+  bot.callbackQuery('admin_logs', async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+    await ctx.answerCallbackQuery().catch(() => {});
+    return showAdminLogs(ctx, true);
+  });
+
+  bot.callbackQuery('admin_broadcast_prompt', async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+    const userCount = ((await kv.smembers('bot_all_users')) || []).length;
+    await kv.set(`bot_state:${chatId}`, 'admin_awaiting_broadcast');
+    await ctx.answerCallbackQuery().catch(() => {});
+    const text =
+      `📢 <b>Kirim Pesan Siaran (Broadcast)</b>\n\n` +
+      `Target Pengguna: <b>${userCount} pengguna</b> bot terdaftar.\n\n` +
+      `Silakan ketik isi pesan yang ingin Anda siarkan ke semua pengguna:`;
+    const kb = new InlineKeyboard().text('❌ Batal', 'admin_cancel_state');
+    return ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
+  });
+
+  bot.callbackQuery('admin_cancel_state', async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId) return;
+    await kv.del(`bot_state:${chatId}`);
+    await ctx.answerCallbackQuery('Dibatalkan').catch(() => {});
+    return showAdminPanel(ctx, true);
+  });
+
+  bot.callbackQuery('admin_master_reset_confirm', async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+    const kb = new InlineKeyboard()
+      .text('⚠️ YA, HAPUS SEMUA INBOX', 'admin_do_master_reset')
+      .row()
+      .text('❌ Batal', 'admin_hub');
+    const text =
+      `⚠️ <b>KONFIRMASI MASTER RESET</b>\n\n` +
+      `Apakah Anda yakin ingin menghapus <b>SEMUA KOTAK MASUK</b> di database server? Tindakan ini tidak dapat dibatalkan!`;
+    return ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
+  });
+
+  bot.callbackQuery('admin_do_master_reset', async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isUserAdmin(chatId, adminId))) {
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
+    }
+    const keys = await kv.keys('inbox:*');
+    if (keys && keys.length > 0) {
+      await kv.del(...keys);
+    }
+    await ctx.answerCallbackQuery(`Berhasil reset ${keys.length} inbox`).catch(() => {});
     return showAdminPanel(ctx, true);
   });
 
@@ -643,7 +1128,7 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
 
 // ─── UI RENDERERS ─────────────────────────────────────────────────────────────
 
-// 1. Dashboard View
+// 1. User Dashboard View
 async function showDashboard(
   ctx: any,
   email: string | null,
@@ -693,7 +1178,7 @@ async function showDashboard(
   }
 }
 
-// 2. Multi-Email List (Screenshot 1 Style)
+// 2. Multi-Email List View
 async function showEmailList(ctx: any, isEdit: boolean = false) {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
@@ -716,8 +1201,6 @@ async function showEmailList(ctx: any, isEdit: boolean = false) {
       const listCount = ((await kv.lrange(`inbox:${e.toLowerCase()}`, 0, -1)) || []).length;
 
       text += `${i + 1}. <code>${escapeHtml(e)}</code> ${badge}\n   └ 📨 ${listCount} pesan\n\n`;
-
-      // Inline button for quick switch
       kb.text(`${isActive ? '✅' : '👉'} ${e}`, `select_email:${e}`).row();
     }
     kb.text('➕ Buat Baru', 'action_random_email')
@@ -738,7 +1221,7 @@ async function showEmailList(ctx: any, isEdit: boolean = false) {
   }
 }
 
-// 3. Inbox List (Screenshot 2 Style)
+// 3. Inbox List View
 async function showInbox(ctx: any, email: string, isEdit: boolean = false) {
   const emailKey = email.toLowerCase();
   const rawEmails = ((await kv.lrange(`inbox:${emailKey}`, 0, -1)) || []) as any[];
@@ -784,7 +1267,6 @@ async function showInbox(ctx: any, email: string, isEdit: boolean = false) {
     }
     text += `\n`;
 
-    // Button to read full message
     const btnLabel = `📖 [${i + 1}] ${subject.length > 22 ? subject.substring(0, 22) + '...' : subject}`;
     kb.text(btnLabel, `read_email:${email}:${msg.id}`).row();
   }
@@ -847,7 +1329,6 @@ async function showEmailDetail(ctx: any, email: string, messageId: string, isEdi
     text += `───────────────────────\n`;
   }
 
-  // Clean body text preview
   let bodyText = (msg.text || '').trim();
   if (!bodyText && msg.html) {
     bodyText = msg.html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -920,12 +1401,14 @@ async function sendHelpMessage(ctx: any, isEdit: boolean = false) {
     `• /myemail — Lihat alamat email aktif saat ini\n` +
     `• /custom — Buat email dengan nama kustom\n` +
     `• /domain — Ganti domain email aktif\n` +
+    `• /admin — Buka Panel Admin (Khusus Admin)\n` +
     `• /help — Tampilkan panduan ini\n\n` +
     `⚡ <b>Fitur Unggulan:</b>\n` +
-    `1. <b>Realtime Alert:</b> Notifikasi pesan baru otomatis terkirim ke Telegram.\n` +
-    `2. <b>Auto OTP:</b> Kode verifikasi 4-8 digit otomatis terdeteksi &amp; siap disalin.\n` +
-    `3. <b>Multi-Email:</b> Simpan hingga 5 email sementara dan ganti kapan saja.\n` +
-    `4. <b>Sinkronisasi Web:</b> Sinkronkan email dari web ke bot via deep link.`;
+    `1. <b>Sistem Konfirmasi Admin:</b> Keamanan pengguna baru termonitor.\n` +
+    `2. <b>Realtime Alert:</b> Notifikasi pesan baru otomatis terkirim ke Telegram.\n` +
+    `3. <b>Auto OTP:</b> Kode verifikasi 4-8 digit otomatis terdeteksi &amp; siap disalin.\n` +
+    `4. <b>Multi-Email:</b> Simpan hingga 5 email sementara dan ganti kapan saja.\n` +
+    `5. <b>Sinkronisasi Web:</b> Sinkronkan email dari web ke bot via deep link.`;
 
   const kb = new InlineKeyboard().text('🔙 Kembali ke Dashboard', 'action_dashboard');
 
@@ -940,25 +1423,355 @@ async function sendHelpMessage(ctx: any, isEdit: boolean = false) {
   }
 }
 
-// 7. Admin Panel View
+// ─── ADMIN DASHBOARD VIEWS (RICH ADMIN HUB) ───────────────────────────────────
+
+// 1. Main Admin Hub
 async function showAdminPanel(ctx: any, isEdit: boolean = false) {
   const keys = await kv.keys('inbox:*');
   const isMaintenance = await kv.get('settings:maintenance');
   const totalEmailsRecv = (await kv.get('stats:emails_received')) || 0;
+  const pendingUsers = ((await kv.smembers('bot_pending_users')) || []).length;
+  const approvedUsers = ((await kv.smembers('bot_approved_users')) || []).length;
+  const customDomains = ((await kv.smembers('domains')) || []).length;
 
   const text =
-    `🛠 <b>PANEL ADMIN BOT</b>\n\n` +
-    `📊 <b>Statistik Sistem:</b>\n` +
-    `• Total Inbox Aktif: <b>${keys.length}</b>\n` +
-    `• Total Email Diterima: <b>${totalEmailsRecv}</b>\n` +
-    `• Status Maintenance: <b>${isMaintenance ? '🔴 AKTIF (Terkunci)' : '🟢 NONAKTIF (Normal)'}</b>\n`;
+    `🛠️ <b>PANEL ADMIN TEMP MAIL</b>\n\n` +
+    `📊 <b>Ringkasan Sistem:</b>\n` +
+    `• Total Inbox Aktif Server: <b>${keys.length}</b>\n` +
+    `• Total Email Masuk: <b>${totalEmailsRecv}</b>\n` +
+    `• ⏳ Menunggu Persetujuan: <b>${pendingUsers}</b> user\n` +
+    `• ✅ Pengguna Disetujui: <b>${approvedUsers}</b> user\n` +
+    `• Custom Domain: <b>${customDomains}</b> domain\n` +
+    `• Mode Maintenance: <b>${isMaintenance ? '🔴 AKTIF (Terkunci)' : '🟢 NONAKTIF (Normal)'}</b>\n\n` +
+    `Pilih menu kelola sistem di bawah ini:`;
 
   const kb = new InlineKeyboard()
-    .text(isMaintenance ? '🔓 Matikan Maintenance' : '🔒 Aktifkan Maintenance', 'admin_toggle_maintenance')
+    .text(`👥 Kelola User (${pendingUsers > 0 ? `⏳ ${pendingUsers}` : approvedUsers})`, 'admin_users')
+    .text('📊 Statistik & Analytics', 'admin_stats')
     .row()
-    .text('🔄 Perbarui Statistik', 'admin_refresh_stats')
+    .text('📬 Pantau Inbox Server', 'admin_inboxes')
+    .text('🌐 Kelola Domain', 'admin_domains')
     .row()
-    .text('🏠 Kembali ke User View', 'action_dashboard');
+    .text('🚫 Keamanan & Ban', 'admin_security')
+    .text('📜 Log Aktivitas', 'admin_logs')
+    .row()
+    .text('📢 Broadcast Pesan', 'admin_broadcast_prompt')
+    .text(isMaintenance ? '🔓 Buka Maintenance' : '🔒 Kunci Maintenance', 'admin_toggle_maintenance')
+    .row()
+    .text('⚠️ Master Reset', 'admin_master_reset_confirm')
+    .text('🏠 User Dashboard', 'action_dashboard');
+
+  try {
+    if (isEdit) {
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
+    } else {
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+    }
+  } catch {
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+  }
+}
+
+// 2. Admin Users Hub
+async function showAdminUsersHub(ctx: any, isEdit: boolean = false) {
+  const pendingUsers = ((await kv.smembers('bot_pending_users')) || []) as string[];
+  const approvedUsers = ((await kv.smembers('bot_approved_users')) || []) as string[];
+  const rejectedUsers = ((await kv.smembers('bot_rejected_users')) || []) as string[];
+  const approvalMode = (await kv.get('settings:approval_mode')) !== false;
+
+  let text =
+    `👥 <b>MANAJEMEN PENGGUNA TELEGRAM BOT</b>\n\n` +
+    `🔐 <b>Wajib Konfirmasi Admin:</b> <b>${approvalMode ? '🟢 AKTIF (Setiap user baru wajib di-approve)' : '⚪ NONAKTIF (Semua bebas pakai)'}</b>\n\n` +
+    `📊 <b>Data Pengguna:</b>\n` +
+    `• ⏳ Menunggu Konfirmasi: <b>${pendingUsers.length}</b> user\n` +
+    `• ✅ Disetujui (Approved): <b>${approvedUsers.length}</b> user\n` +
+    `• ⛔ Ditolak (Rejected): <b>${rejectedUsers.length}</b> user\n\n` +
+    `Pilih aksi di bawah ini:`;
+
+  const kb = new InlineKeyboard()
+    .text(`⏳ Lihat Menunggu (${pendingUsers.length})`, 'admin_view_pending_users')
+    .row()
+    .text(`✅ Lihat Disetujui (${approvedUsers.length})`, 'admin_view_approved_users')
+    .row()
+    .text(approvalMode ? '🔓 Matikan Wajib Approval' : '🔒 Aktifkan Wajib Approval', 'admin_toggle_approval_mode')
+    .row()
+    .text('🔙 Kembali ke Admin Hub', 'admin_hub');
+
+  try {
+    if (isEdit) {
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
+    } else {
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+    }
+  } catch {
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+  }
+}
+
+// 3. Admin Pending Users View
+async function showAdminPendingUsers(ctx: any, isEdit: boolean = false) {
+  const pendingUserIds = ((await kv.smembers('bot_pending_users')) || []) as string[];
+
+  let text =
+    `⏳ <b>PENGGUNA MENUNGGU PERSETUJUAN (${pendingUserIds.length})</b>\n\n`;
+
+  const kb = new InlineKeyboard();
+
+  if (pendingUserIds.length === 0) {
+    text += `<i>Tidak ada pengguna yang sedang menunggu persetujuan. Semua permintaan telah diproses!</i>\n`;
+  } else {
+    for (const uid of pendingUserIds) {
+      const info = ((await kv.get(`bot_user_info:${uid}`)) as any) || { name: `User ${uid}`, username: '', requestedAt: '' };
+      const timeStr = info.requestedAt ? formatTimeAgo(info.requestedAt) : '-';
+      text += `👤 <b>${escapeHtml(info.name)}</b> ${info.username ? `(@${escapeHtml(info.username)})` : ''}\n`;
+      text += `   └ ID: <code>${uid}</code> • 🕒 <i>${timeStr}</i>\n\n`;
+
+      kb.text(`✅ Setujui ${info.name.substring(0, 10)}`, `admin_approve_user:${uid}`)
+        .text(`❌ Tolak`, `admin_reject_user:${uid}`)
+        .row();
+    }
+  }
+
+  kb.text('🔙 Kembali ke Kelola User', 'admin_users');
+
+  try {
+    if (isEdit) {
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
+    } else {
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+    }
+  } catch {
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+  }
+}
+
+// 4. Admin Approved Users View
+async function showAdminApprovedUsers(ctx: any, isEdit: boolean = false) {
+  const approvedUserIds = ((await kv.smembers('bot_approved_users')) || []) as string[];
+
+  let text =
+    `✅ <b>PENGGUNA TERVERIFIKASI / DISETUJUI (${approvedUserIds.length})</b>\n\n`;
+
+  const kb = new InlineKeyboard();
+
+  if (approvedUserIds.length === 0) {
+    text += `<i>Belum ada pengguna yang disetujui.</i>\n`;
+  } else {
+    const maxShow = Math.min(approvedUserIds.length, 8);
+    for (let i = 0; i < maxShow; i++) {
+      const uid = approvedUserIds[i];
+      const info = ((await kv.get(`bot_user_info:${uid}`)) as any) || { name: `User ${uid}`, username: '' };
+      text += `• <b>${escapeHtml(info.name)}</b> ${info.username ? `(@${escapeHtml(info.username)})` : ''} — <code>${uid}</code>\n`;
+      kb.text(`🚫 Cabut Akses (${info.name.substring(0, 10)})`, `admin_reject_user:${uid}`).row();
+    }
+    if (approvedUserIds.length > 8) {
+      text += `\n<i>...dan ${approvedUserIds.length - 8} pengguna lainnya.</i>\n`;
+    }
+  }
+
+  kb.text('🔙 Kembali ke Kelola User', 'admin_users');
+
+  try {
+    if (isEdit) {
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
+    } else {
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+    }
+  } catch {
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+  }
+}
+
+// 5. Admin Stats View
+async function showAdminStats(ctx: any, isEdit: boolean = false) {
+  const keys = await kv.keys('inbox:*');
+  const totalEmailsRecv = (await kv.get('stats:emails_received')) || 0;
+  
+  const today = new Date().toISOString().split('T')[0];
+  const todayCount = (await kv.get(`stats:daily:${today}`)) || 0;
+
+  const yesterdayDate = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+  const yesterdayCount = (await kv.get(`stats:daily:${yesterdayDate}`)) || 0;
+
+  const topSenderMembers = ((await kv.zrange('stats:senders', 0, 4, { rev: true })) || []) as string[];
+
+  let text =
+    `📊 <b>STATISTIK &amp; ANALYTICS SISTEM</b>\n\n` +
+    `• Total Kotak Masuk Aktif: <b>${keys.length}</b>\n` +
+    `• Total Email Masuk: <b>${totalEmailsRecv}</b>\n` +
+    `• Email Hari Ini (${today}): <b>${todayCount}</b>\n` +
+    `• Email Kemarin (${yesterdayDate}): <b>${yesterdayCount}</b>\n\n` +
+    `🏆 <b>Top Pengirim Email:</b>\n`;
+
+  if (topSenderMembers.length === 0) {
+    text += `<i>Belum ada data pengirim terekam.</i>\n`;
+  } else {
+    for (let i = 0; i < topSenderMembers.length; i++) {
+      const sender = topSenderMembers[i];
+      const count = await kv.zscore('stats:senders', sender);
+      text += `${i + 1}. <code>${escapeHtml(sender)}</code> (${count || 0}x)\n`;
+    }
+  }
+
+  const kb = new InlineKeyboard()
+    .text('🔄 Refresh', 'admin_stats')
+    .text('🔙 Kembali ke Admin Hub', 'admin_hub');
+
+  try {
+    if (isEdit) {
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
+    } else {
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+    }
+  } catch {
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+  }
+}
+
+// 6. Admin Inboxes Monitor View
+async function showAdminInboxes(ctx: any, page: number = 0, isEdit: boolean = false) {
+  const keys = ((await kv.keys('inbox:*')) || []) as string[];
+  const pageSize = 6;
+  const totalPages = Math.ceil(keys.length / pageSize) || 1;
+  const currentPage = Math.max(0, Math.min(page, totalPages - 1));
+
+  const pageKeys = keys.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+
+  let text =
+    `📬 <b>PANTAU KOTAK MASUK SERVER</b>\n\n` +
+    `Total Inbox Aktif: <b>${keys.length}</b> (Halaman ${currentPage + 1}/${totalPages})\n` +
+    `<i>Pilih salah satu inbox untuk memeriksa pesan yang ada di dalamnya:</i>\n\n`;
+
+  const kb = new InlineKeyboard();
+
+  if (pageKeys.length === 0) {
+    text += `<i>Tidak ada kotak masuk aktif saat ini.</i>\n`;
+  } else {
+    for (const key of pageKeys) {
+      const address = key.replace('inbox:', '');
+      const count = ((await kv.lrange(key, 0, -1)) || []).length;
+      text += `• <code>${escapeHtml(address)}</code> (${count} pesan)\n`;
+      kb.text(`🔍 ${address} (${count})`, `view_inbox:${address}`).row();
+    }
+  }
+
+  if (currentPage > 0) {
+    kb.text('⬅️ Sebelumnya', `admin_inboxes_page:${currentPage - 1}`);
+  }
+  if (currentPage < totalPages - 1) {
+    kb.text('Selanjutnya ➡️', `admin_inboxes_page:${currentPage + 1}`);
+  }
+  kb.row();
+
+  kb.text('🔄 Refresh', 'admin_inboxes')
+    .text('🔙 Kembali ke Admin Hub', 'admin_hub');
+
+  try {
+    if (isEdit) {
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
+    } else {
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+    }
+  } catch {
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+  }
+}
+
+// 7. Admin Domains View
+async function showAdminDomains(ctx: any, isEdit: boolean = false) {
+  const customDomains = ((await kv.smembers('domains')) || []) as string[];
+
+  let text =
+    `🌐 <b>KELOLA DOMAIN SISTEM</b>\n\n` +
+    `<b>Domain Bawaan (Default):</b>\n`;
+  for (const d of DEFAULT_DOMAINS) {
+    text += `• <code>${escapeHtml(d)}</code>\n`;
+  }
+
+  text += `\n<b>Custom Domain Anda:</b>\n`;
+  const kb = new InlineKeyboard();
+
+  if (customDomains.length === 0) {
+    text += `<i>Belum ada domain tambahan.</i>\n`;
+  } else {
+    for (const d of customDomains) {
+      text += `• <code>${escapeHtml(d)}</code>\n`;
+      kb.text(`🗑 Hapus @${d}`, `admin_delete_domain:${d}`).row();
+    }
+  }
+
+  kb.text('➕ Tambah Domain Baru', 'admin_add_domain_prompt').row();
+  kb.text('🔙 Kembali ke Admin Hub', 'admin_hub');
+
+  try {
+    if (isEdit) {
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
+    } else {
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+    }
+  } catch {
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+  }
+}
+
+// 8. Admin Security View
+async function showAdminSecurity(ctx: any, isEdit: boolean = false) {
+  const bannedEmails = ((await kv.smembers('banned_emails')) || []) as string[];
+  const bannedIps = ((await kv.smembers('banned_ips')) || []) as string[];
+  const reservedNames = ((await kv.smembers('reserved_names')) || []) as string[];
+
+  let text =
+    `🚫 <b>PENGATURAN KEAMANAN &amp; BAN</b>\n\n` +
+    `• Banned Emails: <b>${bannedEmails.length}</b> alamat\n` +
+    `• Banned IPs: <b>${bannedIps.length}</b> IP\n` +
+    `• Reserved Names: <b>${reservedNames.length}</b> kata kunci\n\n` +
+    `<b>Contoh Reserved Names Terkunci:</b>\n`;
+
+  const previewReserved = reservedNames.slice(0, 8);
+  if (previewReserved.length === 0) {
+    text += `<i>(Belum ada reserved names yang disetel)</i>\n`;
+  } else {
+    text += `<code>${escapeHtml(previewReserved.join(', '))}</code>\n`;
+  }
+
+  const kb = new InlineKeyboard()
+    .text('➕ Tambah Reserved Name', 'admin_add_reserved_prompt')
+    .row()
+    .text('🚫 Ban Email Spammer', 'admin_ban_email_prompt')
+    .row()
+    .text('🔙 Kembali ke Admin Hub', 'admin_hub');
+
+  try {
+    if (isEdit) {
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
+    } else {
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+    }
+  } catch {
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
+  }
+}
+
+// 9. Admin Logs View
+async function showAdminLogs(ctx: any, isEdit: boolean = false) {
+  const logs = ((await kv.lrange('system_logs', 0, 7)) || []) as any[];
+
+  let text = `📜 <b>LOG AKTIVITAS SISTEM TERBARU</b>\n\n`;
+
+  if (logs.length === 0) {
+    text += `<i>Belum ada catatan log aktivitas.</i>\n`;
+  } else {
+    for (let i = 0; i < logs.length; i++) {
+      const l = logs[i];
+      const timeAgo = formatTimeAgo(l.timestamp);
+      text += `<b>${i + 1}.</b> 🕒 <i>${escapeHtml(timeAgo)}</i> [${escapeHtml(l.type || 'info')}]\n`;
+      text += `   📝 ${escapeHtml(l.message || '-')}\n\n`;
+    }
+  }
+
+  const kb = new InlineKeyboard()
+    .text('🔄 Refresh Logs', 'admin_logs')
+    .text('🔙 Kembali ke Admin Hub', 'admin_hub');
 
   try {
     if (isEdit) {

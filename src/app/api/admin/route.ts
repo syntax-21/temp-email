@@ -182,6 +182,28 @@ export async function GET(request: Request) {
 
     const systemLogs = (await kv.lrange('system_logs', 0, 299)) || [];
 
+    // Telegram Users Data
+    const pendingUserIds = (await kv.smembers('bot_pending_users')) || [];
+    const approvedUserIds = (await kv.smembers('bot_approved_users')) || [];
+    const rejectedUserIds = (await kv.smembers('bot_rejected_users')) || [];
+    const approvalMode = (await kv.get('settings:approval_mode')) !== false;
+
+    const fetchUserInfo = async (ids: string[], status: string) => {
+      return Promise.all(
+        ids.map(async (id) => {
+          const info = ((await kv.get(`bot_user_info:${id}`)) as any) || { id, name: `User ${id}`, username: '', requestedAt: '' };
+          return { ...info, status };
+        })
+      );
+    };
+
+    const telegramUsers = {
+      pending: await fetchUserInfo(pendingUserIds as string[], 'pending'),
+      approved: await fetchUserInfo(approvedUserIds as string[], 'approved'),
+      rejected: await fetchUserInfo(rejectedUserIds as string[], 'rejected'),
+      approvalMode
+    };
+
     return NextResponse.json({
       totalActiveInboxes: keys.length || 0,
       inboxes,
@@ -193,6 +215,7 @@ export async function GET(request: Request) {
       whitelistEmails,
       settings: { expiry: expiryTime, maintenance: maintenanceMode, autoBanThreshold },
       telegramSettings,
+      telegramUsers,
       domainExpiry,
       stats: { emailsReceived, dailyStats, topSenders, topInboxes },
       systemLogs
@@ -500,6 +523,71 @@ export async function POST(request: Request) {
         } catch (err: any) {
           return NextResponse.json({ error: `Gagal tes koneksi: ${err.message}` }, { status: 500 });
         }
+      }
+
+      // ── TELEGRAM USER MANAGEMENT ACTIONS ─────────────────────────
+      case 'approve_telegram_user':
+        if (value) {
+          const chatId = value.toString();
+          await kv.set(`bot_user_status:${chatId}`, 'approved');
+          await kv.srem('bot_pending_users', chatId);
+          await kv.srem('bot_rejected_users', chatId);
+          await kv.sadd('bot_approved_users', chatId);
+          
+          try {
+            const botToken = ((await kv.get('telegram:bot_token')) as string) || process.env.TELEGRAM_BOT_TOKEN;
+            if (botToken) {
+              const tempBot = getBot(botToken, '', '');
+              await tempBot.api.sendMessage(
+                chatId,
+                `🎉 <b>Selamat! Permintaan Akses Anda Telah Disetujui Admin!</b>\n\n` +
+                `Anda sekarang dapat membuat email sementara, membaca kotak masuk, dan menerima notifikasi kode OTP secara langsung.\n\n` +
+                `Ketik <b>/start</b> untuk mulai menggunakan bot.`,
+                { parse_mode: 'HTML' }
+              );
+            }
+          } catch (notifyErr) {
+            console.error('Failed to notify approved user:', notifyErr);
+          }
+
+          await addLog('settings', `Admin menyetujui user Telegram ID: ${chatId}`);
+          return NextResponse.json({ success: true, message: `User Telegram ${chatId} berhasil disetujui!` });
+        }
+        break;
+
+      case 'reject_telegram_user':
+        if (value) {
+          const chatId = value.toString();
+          await kv.set(`bot_user_status:${chatId}`, 'rejected');
+          await kv.srem('bot_pending_users', chatId);
+          await kv.srem('bot_approved_users', chatId);
+          await kv.sadd('bot_rejected_users', chatId);
+          
+          try {
+            const botToken = ((await kv.get('telegram:bot_token')) as string) || process.env.TELEGRAM_BOT_TOKEN;
+            if (botToken) {
+              const tempBot = getBot(botToken, '', '');
+              await tempBot.api.sendMessage(
+                chatId,
+                `⛔ <b>Pemberitahuan</b>\n\nMaaf, permintaan akses Anda untuk menggunakan Temp Mail Bot telah <b>ditolak</b> oleh Admin.`,
+                { parse_mode: 'HTML' }
+              );
+            }
+          } catch (notifyErr) {
+            console.error('Failed to notify rejected user:', notifyErr);
+          }
+
+          await addLog('settings', `Admin menolak/memblokir user Telegram ID: ${chatId}`);
+          return NextResponse.json({ success: true, message: `User Telegram ${chatId} berhasil ditolak!` });
+        }
+        break;
+
+      case 'toggle_approval_mode': {
+        const current = (await kv.get('settings:approval_mode')) !== false;
+        const next = !current;
+        await kv.set('settings:approval_mode', next);
+        await addLog('settings', `Mode Persetujuan Wajib User Telegram: ${next ? 'AKTIF' : 'NONAKTIF'}`);
+        return NextResponse.json({ success: true, approvalMode: next });
       }
     }
 
