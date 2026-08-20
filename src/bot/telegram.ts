@@ -90,10 +90,13 @@ function getRandomPrefix(): string {
 
 async function isUserAdmin(chatId: number | string, fallbackAdminId?: string): Promise<boolean> {
   try {
-    const configuredAdminId = ((await kv.get('telegram:admin_id')) as string) || fallbackAdminId || process.env.TELEGRAM_ADMIN_ID || '';
-    if (!configuredAdminId) return false;
-    return chatId.toString() === configuredAdminId.trim();
-  } catch {
+    const rawAdmin = (await kv.get('telegram:admin_id')) ?? fallbackAdminId ?? process.env.TELEGRAM_ADMIN_ID ?? '';
+    const adminStr = String(rawAdmin).trim();
+    const userStr = String(chatId).trim();
+    if (!adminStr || !userStr) return false;
+    return userStr === adminStr;
+  } catch (err) {
+    console.error('Error checking isUserAdmin:', err);
     return false;
   }
 }
@@ -105,8 +108,14 @@ export async function checkUserStatus(
   ctxUser?: any,
   fallbackAdminId?: string
 ): Promise<{ status: 'approved' | 'pending' | 'rejected'; isNew: boolean }> {
-  // Admin is always approved
-  if (await isUserAdmin(chatId, fallbackAdminId)) {
+  // Admin is ALWAYS approved and whitelisted immediately
+  const isAdmin = await isUserAdmin(chatId, fallbackAdminId);
+  if (isAdmin) {
+    try {
+      await kv.set(`bot_user_status:${chatId}`, 'approved');
+      await kv.sadd('bot_approved_users', String(chatId));
+      await kv.srem('bot_pending_users', String(chatId));
+    } catch {}
     return { status: 'approved', isNew: false };
   }
 
@@ -126,7 +135,7 @@ export async function checkUserStatus(
   const username = ctxUser?.username || '';
 
   const userInfo = {
-    id: chatId.toString(),
+    id: String(chatId),
     username,
     name,
     requestedAt: new Date().toISOString()
@@ -134,8 +143,8 @@ export async function checkUserStatus(
 
   await kv.set(`bot_user_info:${chatId}`, userInfo);
   await kv.set(`bot_user_status:${chatId}`, 'pending');
-  await kv.sadd('bot_pending_users', chatId.toString());
-  await kv.sadd('bot_all_users', chatId.toString());
+  await kv.sadd('bot_pending_users', String(chatId));
+  await kv.sadd('bot_all_users', String(chatId));
 
   return { status: 'pending', isNew: true };
 }
@@ -277,10 +286,12 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
           { parse_mode: 'HTML' }
         );
 
-        // 2. Notify Admin if brand new request
-        if (isNew) {
-          const currentAdminId = ((await kv.get('telegram:admin_id')) as string) || adminId || process.env.TELEGRAM_ADMIN_ID;
-          if (currentAdminId) {
+        // 2. Notify Admin if brand new request (and not admin himself)
+        if (isNew && !isAdmin) {
+          const rawAdminId = (await kv.get('telegram:admin_id')) ?? adminId ?? process.env.TELEGRAM_ADMIN_ID;
+          const currentAdminId = rawAdminId ? String(rawAdminId).trim() : '';
+          
+          if (currentAdminId && currentAdminId !== String(chatId).trim()) {
             const approvalKb = new InlineKeyboard()
               .text('✅ Setujui Akses', `admin_approve_user:${chatId}`)
               .text('❌ Tolak Akses', `admin_reject_user:${chatId}`);
