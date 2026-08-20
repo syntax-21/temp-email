@@ -19,6 +19,14 @@ let cachedToken: string | null = null;
 
 // ─── HELPER FUNCTIONS ─────────────────────────────────────────────────────────
 
+export function escapeHtml(str: string = ''): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 export function extractOtp(text: string = '', subject: string = ''): string | null {
   const combined = `${subject} \n ${text}`;
   
@@ -72,7 +80,7 @@ async function getSystemDomains(fallbackDomain?: string): Promise<string[]> {
   } catch (e) {
     console.error('Failed to get domains from KV', e);
   }
-  if (fallbackDomain && !DEFAULT_DOMAINS.includes(fallbackDomain)) {
+  if (fallbackDomain && fallbackDomain.trim() && !DEFAULT_DOMAINS.includes(fallbackDomain)) {
     return [fallbackDomain, ...DEFAULT_DOMAINS];
   }
   return DEFAULT_DOMAINS;
@@ -90,7 +98,6 @@ async function getUserEmails(chatId: number | string): Promise<string[]> {
   try {
     const list = await kv.get(`bot_user_emails:${chatId}`);
     if (Array.isArray(list)) return list as string[];
-    // Backward compatibility with single email
     const single = await kv.get(`bot_email:${chatId}`);
     if (single && typeof single === 'string') return [single];
     return [];
@@ -138,7 +145,6 @@ async function removeUserEmail(chatId: number | string, email: string): Promise<
 
 // ─── KEYBOARDS GENERATION ─────────────────────────────────────────────────────
 
-// Persistent bottom keyboard for high accessibility
 export function getPersistentKeyboard() {
   return new Keyboard()
     .text('📬 Email Saya').text('➕ Buat Email').row()
@@ -182,75 +188,83 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
 
   const bot = new Bot(token);
 
+  // Global Error Handler to prevent silent crashes
+  bot.catch((err) => {
+    console.error(`Grammy bot error on update ${err.ctx.update.update_id}:`, err.error);
+  });
+
   // ── COMMAND /start ──────────────────────────────────────────────────────────
   bot.command('start', async (ctx) => {
-    const chatId = ctx.chat.id;
-    const startPayload = ctx.match?.trim() || '';
+    try {
+      const chatId = ctx.chat.id;
+      const startPayload = ctx.match?.trim() || '';
 
-    // Handle deep-link sync from Web (e.g. /start sync_alex_breonline_biz_id or /start email@domain)
-    if (startPayload) {
-      let targetEmail = '';
-      if (startPayload.startsWith('sync_')) {
-        const clean = startPayload.replace('sync_', '').replace(/_/g, '.');
-        if (clean.includes('@')) {
-          targetEmail = clean.toLowerCase();
-        }
-      } else if (startPayload.includes('@')) {
-        targetEmail = startPayload.toLowerCase();
-      }
-
-      if (targetEmail) {
-        const existingEmails = await getUserEmails(chatId);
-        if (!existingEmails.includes(targetEmail)) {
-          if (existingEmails.length >= 5) {
-            existingEmails.pop(); // keep maximum 5 emails
+      // Handle deep-link sync from Web (e.g. /start sync_alex_breonline_biz_id or /start email@domain)
+      if (startPayload) {
+        let targetEmail = '';
+        if (startPayload.startsWith('sync_')) {
+          const clean = startPayload.replace('sync_', '').replace(/_/g, '.');
+          if (clean.includes('@')) {
+            targetEmail = clean.toLowerCase();
           }
-          existingEmails.unshift(targetEmail);
-          await saveUserEmails(chatId, existingEmails);
+        } else if (startPayload.includes('@')) {
+          targetEmail = startPayload.toLowerCase();
         }
-        await setActiveEmail(chatId, targetEmail);
 
-        await ctx.reply(
-          `✨ *Email Berhasil Disinkronkan!*\n\n` +
-          `Email aktif Anda sekarang:\n` +
-          `\`${targetEmail}\` _(tekan untuk salin)_\n\n` +
-          `🔔 *Notifikasi Instan Aktif:* Anda akan menerima notifikasi otomatis begitu ada email/kode OTP masuk!`,
-          {
-            parse_mode: 'Markdown',
-            reply_markup: getPersistentKeyboard(),
+        if (targetEmail) {
+          const existingEmails = await getUserEmails(chatId);
+          if (!existingEmails.includes(targetEmail)) {
+            if (existingEmails.length >= 5) {
+              existingEmails.pop(); // keep max 5 emails
+            }
+            existingEmails.unshift(targetEmail);
+            await saveUserEmails(chatId, existingEmails);
           }
-        );
-        return showDashboard(ctx, targetEmail, false);
+          await setActiveEmail(chatId, targetEmail);
+
+          await ctx.reply(
+            `✨ <b>Email Berhasil Disinkronkan!</b>\n\n` +
+            `Email aktif Anda sekarang:\n` +
+            `<code>${escapeHtml(targetEmail)}</code> <i>(tekan untuk salin)</i>\n\n` +
+            `🔔 <b>Notifikasi Instan Aktif:</b> Anda akan menerima notifikasi otomatis begitu ada email/kode OTP masuk!`,
+            {
+              parse_mode: 'HTML',
+              reply_markup: getPersistentKeyboard(),
+            }
+          );
+          return showDashboard(ctx, targetEmail, false);
+        }
       }
-    }
 
-    // Default start flow
-    let activeEmail = await getActiveEmail(chatId);
-    if (!activeEmail) {
-      // Auto-create initial email for instant ease of use!
-      const domains = await getSystemDomains(configuredDomain);
-      const chosenDomain = domains[0] || 'breonline.biz.id';
-      const prefix = getRandomPrefix();
-      activeEmail = `${prefix}@${chosenDomain}`;
+      // Default start flow
+      let activeEmail = await getActiveEmail(chatId);
+      if (!activeEmail) {
+        const domains = await getSystemDomains(configuredDomain);
+        const chosenDomain = domains[0] || 'breonline.biz.id';
+        const prefix = getRandomPrefix();
+        activeEmail = `${prefix}@${chosenDomain}`;
 
-      await saveUserEmails(chatId, [activeEmail]);
-      await setActiveEmail(chatId, activeEmail);
-    }
-
-    await ctx.reply(
-      `👋 *Selamat Datang di Temp Mail Bot!*\n\n` +
-      `Layanan email sementara kilat, aman & anti-spam. Gunakan email ini untuk pendaftaran akun, verifikasi OTP, atau uji coba tanpa mengotori email pribadi.\n\n` +
-      `⚡ *Fitur Utama:*\n` +
-      `• Deteksi otomatis kode OTP & tombol salin instan\n` +
-      `• Notifikasi real-time email masuk langsung ke Telegram\n` +
-      `• Kelola hingga 5 email sekaligus & kustom nama`,
-      {
-        parse_mode: 'Markdown',
-        reply_markup: getPersistentKeyboard(),
+        await saveUserEmails(chatId, [activeEmail]);
+        await setActiveEmail(chatId, activeEmail);
       }
-    );
 
-    return showDashboard(ctx, activeEmail, false);
+      await ctx.reply(
+        `👋 <b>Selamat Datang di Temp Mail Bot!</b>\n\n` +
+        `Layanan email sementara kilat, aman &amp; anti-spam. Gunakan email ini untuk pendaftaran akun, verifikasi OTP, atau uji coba tanpa mengotori email pribadi.\n\n` +
+        `⚡ <b>Fitur Utama:</b>\n` +
+        `• Deteksi otomatis kode OTP &amp; tombol salin instan\n` +
+        `• Notifikasi real-time email masuk langsung ke Telegram\n` +
+        `• Kelola hingga 5 email sekaligus &amp; kustom nama`,
+        {
+          parse_mode: 'HTML',
+          reply_markup: getPersistentKeyboard(),
+        }
+      );
+
+      return showDashboard(ctx, activeEmail, false);
+    } catch (e) {
+      console.error('Error in /start command:', e);
+    }
   });
 
   // ── COMMAND /help & /panduan ────────────────────────────────────────────────
@@ -290,7 +304,7 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     await saveUserEmails(chatId, updated);
     await setActiveEmail(chatId, newEmail);
 
-    return showDashboard(ctx, newEmail, false, `✨ *Email baru berhasil dibuat!*`);
+    return showDashboard(ctx, newEmail, false, `✨ <b>Email baru berhasil dibuat!</b>`);
   });
 
   // ── COMMAND /custom ─────────────────────────────────────────────────────────
@@ -301,12 +315,12 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     const prefDomain = ((await kv.get(`bot_selected_domain:${chatId}`)) as string) || domains[0];
 
     return ctx.reply(
-      `✏️ *Buat Email Kustom*\n\n` +
-      `Domain terpilih: \`@${prefDomain}\`\n\n` +
+      `✏️ <b>Buat Email Kustom</b>\n\n` +
+      `Domain terpilih: <code>@${escapeHtml(prefDomain)}</code>\n\n` +
       `Ketik nama email yang Anda inginkan (hanya huruf kecil, angka, titik, atau strip).\n` +
-      `_Contoh: \`budi99\` atau \`sarah.online\`_`,
+      `<i>Contoh: <code>budi99</code> atau <code>sarah.online</code></i>`,
       {
-        parse_mode: 'Markdown',
+        parse_mode: 'HTML',
         reply_markup: new InlineKeyboard().text('❌ Batal', 'action_cancel_state'),
       }
     );
@@ -346,7 +360,7 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
       await saveUserEmails(chatId, updated);
       await setActiveEmail(chatId, newEmail);
 
-      return showDashboard(ctx, newEmail, false, `✨ *Email baru berhasil dibuat!*`);
+      return showDashboard(ctx, newEmail, false, `✨ <b>Email baru berhasil dibuat!</b>`);
     }
     if (text === '📥 Kotak Masuk') {
       const activeEmail = await getActiveEmail(chatId);
@@ -391,7 +405,7 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
       await setActiveEmail(chatId, newEmail);
       await kv.del(`bot_state:${chatId}`);
 
-      return showDashboard(ctx, newEmail, false, `✅ *Email kustom berhasil dibuat!*`);
+      return showDashboard(ctx, newEmail, false, `✅ <b>Email kustom berhasil dibuat!</b>`);
     }
 
     // Fallback info
@@ -405,7 +419,7 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
   // Dashboard Refresh & View
   bot.callbackQuery(/^refresh_dashboard:(.+)$/, async (ctx) => {
     const email = ctx.match[1];
-    await ctx.answerCallbackQuery('🔄 Memperbarui status...');
+    await ctx.answerCallbackQuery('🔄 Memperbarui status...').catch(() => {});
     return showDashboard(ctx, email, true);
   });
 
@@ -413,7 +427,7 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     const chatId = ctx.chat?.id;
     if (!chatId) return;
     const activeEmail = await getActiveEmail(chatId);
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     return showDashboard(ctx, activeEmail, true);
   });
 
@@ -431,8 +445,8 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     await saveUserEmails(chatId, updated);
     await setActiveEmail(chatId, newEmail);
 
-    await ctx.answerCallbackQuery('✨ Email baru siap digunakan!');
-    return showDashboard(ctx, newEmail, true, `✨ *Email baru berhasil dibuat!*`);
+    await ctx.answerCallbackQuery('✨ Email baru siap digunakan!').catch(() => {});
+    return showDashboard(ctx, newEmail, true, `✨ <b>Email baru berhasil dibuat!</b>`);
   });
 
   // Custom Prefix Prompt
@@ -444,18 +458,18 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     const domains = await getSystemDomains(configuredDomain);
     const prefDomain = ((await kv.get(`bot_selected_domain:${chatId}`)) as string) || domains[0];
 
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     const text =
-      `✏️ *Buat Email Kustom*\n\n` +
-      `Domain terpilih: \`@${prefDomain}\`\n\n` +
-      `Silakan balas pesan ini dengan mengetik nama email yang Anda inginkan (misal: \`budi99\` atau \`sarah.store\`).`;
+      `✏️ <b>Buat Email Kustom</b>\n\n` +
+      `Domain terpilih: <code>@${escapeHtml(prefDomain)}</code>\n\n` +
+      `Silakan balas pesan ini dengan mengetik nama email yang Anda inginkan (misal: <code>budi99</code> atau <code>sarah.store</code>).`;
 
     const kb = new InlineKeyboard().text('❌ Batal', 'action_cancel_state');
 
     try {
-      await ctx.editMessageText(text, { parse_mode: 'Markdown', reply_markup: kb });
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
     } catch {
-      await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: kb });
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
     }
   });
 
@@ -464,14 +478,14 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     const chatId = ctx.chat?.id;
     if (!chatId) return;
     await kv.del(`bot_state:${chatId}`);
-    await ctx.answerCallbackQuery('Dibatalkan');
+    await ctx.answerCallbackQuery('Dibatalkan').catch(() => {});
     const activeEmail = await getActiveEmail(chatId);
     return showDashboard(ctx, activeEmail, true);
   });
 
   // Select Domain Flow
   bot.callbackQuery('action_select_domain', async (ctx) => {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     return showDomainSelector(ctx, true);
   });
 
@@ -480,9 +494,8 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     if (!chatId) return;
     const domain = ctx.match[1];
     await kv.set(`bot_selected_domain:${chatId}`, domain);
-    await ctx.answerCallbackQuery(`Domain terpilih: ${domain}`);
+    await ctx.answerCallbackQuery(`Domain terpilih: ${domain}`).catch(() => {});
 
-    // Update active email's domain or keep prefix
     const active = await getActiveEmail(chatId);
     if (active && active.includes('@')) {
       const prefix = active.split('@')[0];
@@ -491,7 +504,7 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
       const updated = [newEmail, ...existing.filter((e) => e !== newEmail)].slice(0, 5);
       await saveUserEmails(chatId, updated);
       await setActiveEmail(chatId, newEmail);
-      return showDashboard(ctx, newEmail, true, `🌐 *Domain diubah ke @${domain}*`);
+      return showDashboard(ctx, newEmail, true, `🌐 <b>Domain diubah ke @${escapeHtml(domain)}</b>`);
     }
 
     return showDomainSelector(ctx, true);
@@ -501,7 +514,7 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
   bot.callbackQuery('action_list_emails', async (ctx) => {
     const chatId = ctx.chat?.id;
     if (!chatId) return;
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     return showEmailList(ctx, true);
   });
 
@@ -511,7 +524,7 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     if (!chatId) return;
     const targetEmail = ctx.match[1];
     await setActiveEmail(chatId, targetEmail);
-    await ctx.answerCallbackQuery(`Email aktif: ${targetEmail}`);
+    await ctx.answerCallbackQuery(`Email aktif: ${targetEmail}`).catch(() => {});
     return showDashboard(ctx, targetEmail, true);
   });
 
@@ -525,15 +538,15 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
       .text('🗑 Ya, Hapus Sekarang', `confirm_delete_email:${emailToDelete}`)
       .text('❌ Batal', `refresh_dashboard:${emailToDelete}`);
 
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     const confirmText =
-      `⚠️ *Konfirmasi Hapus Email*\n\n` +
-      `Apakah Anda yakin ingin menghapus email \`${emailToDelete}\` beserta seluruh kotak masuknya?`;
+      `⚠️ <b>Konfirmasi Hapus Email</b>\n\n` +
+      `Apakah Anda yakin ingin menghapus email <code>${escapeHtml(emailToDelete)}</code> beserta seluruh kotak masuknya?`;
 
     try {
-      await ctx.editMessageText(confirmText, { parse_mode: 'Markdown', reply_markup: kb });
+      await ctx.editMessageText(confirmText, { parse_mode: 'HTML', reply_markup: kb });
     } catch {
-      await ctx.reply(confirmText, { parse_mode: 'Markdown', reply_markup: kb });
+      await ctx.reply(confirmText, { parse_mode: 'HTML', reply_markup: kb });
     }
   });
 
@@ -544,10 +557,10 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
 
     await removeUserEmail(chatId, emailToDelete);
     await kv.del(`inbox:${emailToDelete.toLowerCase()}`);
-    await ctx.answerCallbackQuery('Email berhasil dihapus');
+    await ctx.answerCallbackQuery('Email berhasil dihapus').catch(() => {});
 
     const nextActive = await getActiveEmail(chatId);
-    return showDashboard(ctx, nextActive, true, `🗑 *Email \`${emailToDelete}\` telah dihapus.*`);
+    return showDashboard(ctx, nextActive, true, `🗑 <b>Email <code>${escapeHtml(emailToDelete)}</code> telah dihapus.</b>`);
   });
 
   // ── INBOX & EMAIL READER (Screenshot 2 Style & Instant Reader) ──────────────
@@ -555,7 +568,7 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
   // View Inbox List
   bot.callbackQuery(/^view_inbox:(.+)$/, async (ctx) => {
     const email = ctx.match[1];
-    await ctx.answerCallbackQuery('Memuat kotak masuk...');
+    await ctx.answerCallbackQuery('Memuat kotak masuk...').catch(() => {});
     return showInbox(ctx, email, true);
   });
 
@@ -563,7 +576,7 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
   bot.callbackQuery(/^read_email:(.+):(.+)$/, async (ctx) => {
     const email = ctx.match[1];
     const messageId = ctx.match[2];
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     return showEmailDetail(ctx, email, messageId, true);
   });
 
@@ -581,7 +594,7 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
       }
     }
 
-    await ctx.answerCallbackQuery('Pesan berhasil dihapus');
+    await ctx.answerCallbackQuery('Pesan berhasil dihapus').catch(() => {});
     return showInbox(ctx, email, true);
   });
 
@@ -589,20 +602,20 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
   bot.callbackQuery(/^clear_inbox:(.+)$/, async (ctx) => {
     const email = ctx.match[1];
     await kv.del(`inbox:${email.toLowerCase()}`);
-    await ctx.answerCallbackQuery('Kotak masuk telah dibersihkan');
+    await ctx.answerCallbackQuery('Kotak masuk telah dibersihkan').catch(() => {});
     return showInbox(ctx, email, true);
   });
 
   // Help Action
   bot.callbackQuery('action_help', async (ctx) => {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     return sendHelpMessage(ctx, true);
   });
 
   // Admin Actions
   bot.callbackQuery('admin_toggle_maintenance', async (ctx) => {
     if (!adminId || ctx.from?.id.toString() !== adminId) {
-      return ctx.answerCallbackQuery('Akses ditolak!');
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
     }
     const current = await kv.get('settings:maintenance');
     const next = !current;
@@ -611,15 +624,15 @@ export function getBot(token: string, adminId: string, configuredDomain: string)
     } else {
       await kv.del('settings:maintenance');
     }
-    await ctx.answerCallbackQuery(`Maintenance ${next ? 'Aktif' : 'Nonaktif'}`);
+    await ctx.answerCallbackQuery(`Maintenance ${next ? 'Aktif' : 'Nonaktif'}`).catch(() => {});
     return showAdminPanel(ctx, true);
   });
 
   bot.callbackQuery('admin_refresh_stats', async (ctx) => {
     if (!adminId || ctx.from?.id.toString() !== adminId) {
-      return ctx.answerCallbackQuery('Akses ditolak!');
+      return ctx.answerCallbackQuery('Akses ditolak!').catch(() => {});
     }
-    await ctx.answerCallbackQuery('Statistik diperbarui');
+    await ctx.answerCallbackQuery('Statistik diperbarui').catch(() => {});
     return showAdminPanel(ctx, true);
   });
 
@@ -651,16 +664,16 @@ async function showDashboard(
   if (email) {
     const domain = email.split('@')[1] || '-';
     text +=
-      `📬 *TEMPORARY EMAIL ANDA*\n\n` +
-      `📧 *Alamat Aktif:*\n` +
-      `\`${email}\` _(tap untuk salin)_\n\n` +
-      `📊 *Status:* 🟢 Aktif & Siap Menerima Email\n` +
-      `📨 *Pesan Masuk:* *${inboxCount}* pesan\n` +
-      `🌐 *Domain:* \`@${domain}\`\n\n` +
-      `_💡 Tips: Salin email di atas dan gunakan untuk verifikasi akun atau pendaftaran. Kode OTP akan otomatis muncul begitu email terkirim!_`;
+      `📬 <b>TEMPORARY EMAIL ANDA</b>\n\n` +
+      `📧 <b>Alamat Aktif:</b>\n` +
+      `<code>${escapeHtml(email)}</code> <i>(tap untuk salin)</i>\n\n` +
+      `📊 <b>Status:</b> 🟢 Aktif &amp; Siap Menerima Email\n` +
+      `📨 <b>Pesan Masuk:</b> <b>${inboxCount}</b> pesan\n` +
+      `🌐 <b>Domain:</b> <code>@${escapeHtml(domain)}</code>\n\n` +
+      `<i>💡 Tips: Salin email di atas dan gunakan untuk verifikasi akun atau pendaftaran. Kode OTP akan otomatis muncul begitu email terkirim!</i>`;
   } else {
     text +=
-      `📬 *TEMPORARY EMAIL*\n\n` +
+      `📬 <b>TEMPORARY EMAIL</b>\n\n` +
       `Anda belum memiliki alamat email sementara aktif.\n` +
       `Klik tombol di bawah untuk membuat email baru dalam 1 detik!`;
   }
@@ -669,13 +682,13 @@ async function showDashboard(
 
   try {
     if (isEdit) {
-      await ctx.editMessageText(text, { parse_mode: 'Markdown', reply_markup: kb });
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
     } else {
-      await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: kb });
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
     }
   } catch (err: any) {
     if (!err.message?.includes('message is not modified')) {
-      await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: kb });
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
     }
   }
 }
@@ -688,12 +701,12 @@ async function showEmailList(ctx: any, isEdit: boolean = false) {
   const emails = await getUserEmails(chatId);
   const activeEmail = await getActiveEmail(chatId);
 
-  let text = `📋 *Daftar Email Sementara Anda* (${emails.length}/5):\n\n`;
+  let text = `📋 <b>Daftar Email Sementara Anda</b> (${emails.length}/5):\n\n`;
 
   const kb = new InlineKeyboard();
 
   if (emails.length === 0) {
-    text += `_Belum ada email tersimpan._\n`;
+    text += `<i>Belum ada email tersimpan.</i>\n`;
     kb.text('➕ Buat Email Baru', 'action_random_email').row();
   } else {
     for (let i = 0; i < emails.length; i++) {
@@ -702,7 +715,7 @@ async function showEmailList(ctx: any, isEdit: boolean = false) {
       const badge = isActive ? '⭐ (Aktif)' : '';
       const listCount = ((await kv.lrange(`inbox:${e.toLowerCase()}`, 0, -1)) || []).length;
 
-      text += `${i + 1}. \`${e}\` ${badge}\n   └ 📨 ${listCount} pesan\n\n`;
+      text += `${i + 1}. <code>${escapeHtml(e)}</code> ${badge}\n   └ 📨 ${listCount} pesan\n\n`;
 
       // Inline button for quick switch
       kb.text(`${isActive ? '✅' : '👉'} ${e}`, `select_email:${e}`).row();
@@ -716,12 +729,12 @@ async function showEmailList(ctx: any, isEdit: boolean = false) {
 
   try {
     if (isEdit) {
-      await ctx.editMessageText(text, { parse_mode: 'Markdown', reply_markup: kb });
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
     } else {
-      await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: kb });
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
     }
   } catch {
-    await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: kb });
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
   }
 }
 
@@ -734,26 +747,26 @@ async function showInbox(ctx: any, email: string, isEdit: boolean = false) {
 
   if (rawEmails.length === 0) {
     const emptyText =
-      `📥 *Kotak Masuk Kosong*\n\n` +
-      `Alamat: \`${email}\`\n\n` +
+      `📥 <b>Kotak Masuk Kosong</b>\n\n` +
+      `Alamat: <code>${escapeHtml(email)}</code>\n\n` +
       `Belum ada email yang masuk. Begitu ada email dikirimkan ke alamat ini, pesan akan langsung muncul di sini secara otomatis.\n\n` +
-      `_Status: Menunggu email masuk..._`;
+      `<i>Status: Menunggu email masuk...</i>`;
 
     kb.text('🔄 Refresh Inbox', `view_inbox:${email}`).row();
     kb.text('🔙 Kembali ke Dashboard', 'action_dashboard');
 
     try {
       if (isEdit) {
-        return await ctx.editMessageText(emptyText, { parse_mode: 'Markdown', reply_markup: kb });
+        return await ctx.editMessageText(emptyText, { parse_mode: 'HTML', reply_markup: kb });
       }
-      return await ctx.reply(emptyText, { parse_mode: 'Markdown', reply_markup: kb });
+      return await ctx.reply(emptyText, { parse_mode: 'HTML', reply_markup: kb });
     } catch {
-      return await ctx.reply(emptyText, { parse_mode: 'Markdown', reply_markup: kb });
+      return await ctx.reply(emptyText, { parse_mode: 'HTML', reply_markup: kb });
     }
   }
 
-  let text = `📥 *Kotak Masuk untuk* \`${email}\`\n`;
-  text += `*Total Pesan:* ${rawEmails.length}\n`;
+  let text = `📥 <b>Kotak Masuk untuk</b> <code>${escapeHtml(email)}</code>\n`;
+  text += `<b>Total Pesan:</b> ${rawEmails.length}\n`;
   text += `───────────────────────\n\n`;
 
   const maxShow = Math.min(rawEmails.length, 6);
@@ -764,10 +777,10 @@ async function showInbox(ctx: any, email: string, isEdit: boolean = false) {
     const sender = msg.fromName ? `${msg.fromName}` : (msg.from || 'Unknown');
     const subject = msg.subject || '(Tanpa Subjek)';
 
-    text += `*${i + 1}.* 👤 *${sender}* • 🕒 _${timeAgo}_\n`;
-    text += `   📌 *Subjek:* ${subject}\n`;
+    text += `<b>${i + 1}.</b> 👤 <b>${escapeHtml(sender)}</b> • 🕒 <i>${escapeHtml(timeAgo)}</i>\n`;
+    text += `   📌 <b>Subjek:</b> ${escapeHtml(subject)}\n`;
     if (otp) {
-      text += `   🔑 *Kode OTP:* \`${otp}\`\n`;
+      text += `   🔑 <b>Kode OTP:</b> <code>${escapeHtml(otp)}</code>\n`;
     }
     text += `\n`;
 
@@ -777,10 +790,10 @@ async function showInbox(ctx: any, email: string, isEdit: boolean = false) {
   }
 
   if (rawEmails.length > 6) {
-    text += `_Terdapat ${rawEmails.length - 6} pesan lainnya._\n\n`;
+    text += `<i>Terdapat ${rawEmails.length - 6} pesan lainnya.</i>\n\n`;
   }
 
-  text += `_Klik salah satu tombol di bawah untuk membaca isi pesan lengkap._`;
+  text += `<i>Klik salah satu tombol di bawah untuk membaca isi pesan lengkap.</i>`;
 
   kb.text('🔄 Refresh', `view_inbox:${email}`)
     .text('🗑 Kosongkan Inbox', `clear_inbox:${email}`)
@@ -789,12 +802,12 @@ async function showInbox(ctx: any, email: string, isEdit: boolean = false) {
 
   try {
     if (isEdit) {
-      await ctx.editMessageText(text, { parse_mode: 'Markdown', reply_markup: kb });
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
     } else {
-      await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: kb });
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
     }
   } catch {
-    await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: kb });
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
   }
 }
 
@@ -807,28 +820,28 @@ async function showEmailDetail(ctx: any, email: string, messageId: string, isEdi
 
   if (!msg) {
     kb.text('🔙 Kembali ke Inbox', `view_inbox:${email}`);
-    const notFoundText = `⚠️ *Pesan tidak ditemukan atau sudah dihapus.*`;
+    const notFoundText = `⚠️ <b>Pesan tidak ditemukan atau sudah dihapus.</b>`;
     try {
-      if (isEdit) return await ctx.editMessageText(notFoundText, { parse_mode: 'Markdown', reply_markup: kb });
-      return await ctx.reply(notFoundText, { parse_mode: 'Markdown', reply_markup: kb });
+      if (isEdit) return await ctx.editMessageText(notFoundText, { parse_mode: 'HTML', reply_markup: kb });
+      return await ctx.reply(notFoundText, { parse_mode: 'HTML', reply_markup: kb });
     } catch {
-      return await ctx.reply(notFoundText, { parse_mode: 'Markdown', reply_markup: kb });
+      return await ctx.reply(notFoundText, { parse_mode: 'HTML', reply_markup: kb });
     }
   }
 
   const otp = extractOtp(msg.text || '', msg.subject || '');
   const timeStr = msg.receivedAt ? new Date(msg.receivedAt).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' }) : '-';
 
-  let text = `✉️ *DETAIL PESAN MASUK*\n\n`;
-  text += `👤 *Dari:* ${msg.fromName ? `${msg.fromName} <${msg.from}>` : msg.from}\n`;
-  text += `📫 *Kepada:* \`${email}\`\n`;
-  text += `📌 *Subjek:* *${msg.subject || '(Tanpa Subjek)'}*\n`;
-  text += `🕒 *Waktu:* ${timeStr} WIB\n`;
+  let text = `✉️ <b>DETAIL PESAN MASUK</b>\n\n`;
+  text += `👤 <b>Dari:</b> ${escapeHtml(msg.fromName ? `${msg.fromName} <${msg.from}>` : msg.from)}\n`;
+  text += `📫 <b>Kepada:</b> <code>${escapeHtml(email)}</code>\n`;
+  text += `📌 <b>Subjek:</b> <b>${escapeHtml(msg.subject || '(Tanpa Subjek)')}</b>\n`;
+  text += `🕒 <b>Waktu:</b> ${timeStr} WIB\n`;
 
   if (otp) {
     text += `\n───────────────────────\n`;
-    text += `🔑 *KODE VERIFIKASI / OTP TERDETEKSI:*\n`;
-    text += `👉 \`${otp}\` 👈 _(tekan untuk salin)_\n`;
+    text += `🔑 <b>KODE VERIFIKASI / OTP TERDETEKSI:</b>\n`;
+    text += `👉 <code>${escapeHtml(otp)}</code> 👈 <i>(tekan untuk salin)</i>\n`;
     text += `───────────────────────\n`;
   } else {
     text += `───────────────────────\n`;
@@ -837,19 +850,17 @@ async function showEmailDetail(ctx: any, email: string, messageId: string, isEdi
   // Clean body text preview
   let bodyText = (msg.text || '').trim();
   if (!bodyText && msg.html) {
-    // Basic strip tags if only HTML is present
     bodyText = msg.html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
   }
   if (!bodyText) {
-    bodyText = '_(Tidak ada isi teks pada email ini)_';
+    bodyText = '(Tidak ada isi teks pada email ini)';
   }
 
-  // Cap length to avoid Telegram 4096 character limit
   if (bodyText.length > 2500) {
-    bodyText = bodyText.substring(0, 2500) + '\n\n_... (Pesan dipotong karena terlalu panjang)_';
+    bodyText = bodyText.substring(0, 2500) + '\n\n... (Pesan dipotong karena terlalu panjang)';
   }
 
-  text += `\n📄 *Isi Pesan:*\n\n${bodyText}`;
+  text += `\n📄 <b>Isi Pesan:</b>\n\n${escapeHtml(bodyText)}`;
 
   kb.text('🔙 Kembali ke Inbox', `view_inbox:${email}`)
     .text('🗑 Hapus Pesan', `del_msg:${email}:${messageId}`)
@@ -858,12 +869,12 @@ async function showEmailDetail(ctx: any, email: string, messageId: string, isEdi
 
   try {
     if (isEdit) {
-      await ctx.editMessageText(text, { parse_mode: 'Markdown', reply_markup: kb });
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
     } else {
-      await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: kb });
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
     }
   } catch {
-    await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: kb });
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
   }
 }
 
@@ -874,13 +885,13 @@ async function showDomainSelector(ctx: any, isEdit: boolean = false) {
   const currentPref = chatId ? ((await kv.get(`bot_selected_domain:${chatId}`)) as string) : null;
 
   let text =
-    `🌐 *Pilih Domain Email*\n\n` +
+    `🌐 <b>Pilih Domain Email</b>\n\n` +
     `Pilih domain yang ingin Anda gunakan untuk pembuatan email baru:\n\n`;
 
   const kb = new InlineKeyboard();
   for (const d of domains) {
     const isSelected = d === (currentPref || domains[0]);
-    text += `${isSelected ? '✅' : '▫️'} \`@${d}\`\n`;
+    text += `${isSelected ? '✅' : '▫️'} <code>@${escapeHtml(d)}</code>\n`;
     kb.text(`${isSelected ? '✅ ' : ''}@${d}`, `set_domain:${d}`).row();
   }
 
@@ -888,44 +899,44 @@ async function showDomainSelector(ctx: any, isEdit: boolean = false) {
 
   try {
     if (isEdit) {
-      await ctx.editMessageText(text, { parse_mode: 'Markdown', reply_markup: kb });
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
     } else {
-      await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: kb });
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
     }
   } catch {
-    await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: kb });
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
   }
 }
 
 // 6. Help Message
 async function sendHelpMessage(ctx: any, isEdit: boolean = false) {
   const text =
-    `❓ *PANDUAN & BANTUAN TEMP MAIL BOT*\n\n` +
+    `❓ <b>PANDUAN &amp; BANTUAN TEMP MAIL BOT</b>\n\n` +
     `Bot ini memungkinkan Anda memiliki kotak masuk email sementara tanpa perlu registrasi atau membuka browser.\n\n` +
-    `📌 *Daftar Perintah Cepat:*\n` +
-    `• /start — Mulai bot & buka dashboard utama\n` +
+    `📌 <b>Daftar Perintah Cepat:</b>\n` +
+    `• /start — Mulai bot &amp; buka dashboard utama\n` +
     `• /new — Buat alamat email acak baru\n` +
-    `• /inbox — Buka & periksa kotak masuk aktif\n` +
+    `• /inbox — Buka &amp; periksa kotak masuk aktif\n` +
     `• /myemail — Lihat alamat email aktif saat ini\n` +
     `• /custom — Buat email dengan nama kustom\n` +
     `• /domain — Ganti domain email aktif\n` +
     `• /help — Tampilkan panduan ini\n\n` +
-    `⚡ *Fitur Unggulan:*\n` +
-    `1. *Realtime Alert:* Notifikasi pesan baru otomatis terkirim ke Telegram.\n` +
-    `2. *Auto OTP:* Kode verifikasi 4-8 digit otomatis terdeteksi & siap disalin.\n` +
-    `3. *Multi-Email:* Simpan hingga 5 email sementara dan ganti kapan saja.\n` +
-    `4. *Sinkronisasi Web:* Sinkronkan email dari web ke bot via deep link.`;
+    `⚡ <b>Fitur Unggulan:</b>\n` +
+    `1. <b>Realtime Alert:</b> Notifikasi pesan baru otomatis terkirim ke Telegram.\n` +
+    `2. <b>Auto OTP:</b> Kode verifikasi 4-8 digit otomatis terdeteksi &amp; siap disalin.\n` +
+    `3. <b>Multi-Email:</b> Simpan hingga 5 email sementara dan ganti kapan saja.\n` +
+    `4. <b>Sinkronisasi Web:</b> Sinkronkan email dari web ke bot via deep link.`;
 
   const kb = new InlineKeyboard().text('🔙 Kembali ke Dashboard', 'action_dashboard');
 
   try {
     if (isEdit) {
-      await ctx.editMessageText(text, { parse_mode: 'Markdown', reply_markup: kb });
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
     } else {
-      await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: kb });
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
     }
   } catch {
-    await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: kb });
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
   }
 }
 
@@ -936,11 +947,11 @@ async function showAdminPanel(ctx: any, isEdit: boolean = false) {
   const totalEmailsRecv = (await kv.get('stats:emails_received')) || 0;
 
   const text =
-    `🛠 *PANEL ADMIN BOT*\n\n` +
-    `📊 *Statistik Sistem:*\n` +
-    `• Total Inbox Aktif: *${keys.length}*\n` +
-    `• Total Email Diterima: *${totalEmailsRecv}*\n` +
-    `• Status Maintenance: *${isMaintenance ? '🔴 AKTIF (Terkunci)' : '🟢 NONAKTIF (Normal)'}*\n`;
+    `🛠 <b>PANEL ADMIN BOT</b>\n\n` +
+    `📊 <b>Statistik Sistem:</b>\n` +
+    `• Total Inbox Aktif: <b>${keys.length}</b>\n` +
+    `• Total Email Diterima: <b>${totalEmailsRecv}</b>\n` +
+    `• Status Maintenance: <b>${isMaintenance ? '🔴 AKTIF (Terkunci)' : '🟢 NONAKTIF (Normal)'}</b>\n`;
 
   const kb = new InlineKeyboard()
     .text(isMaintenance ? '🔓 Matikan Maintenance' : '🔒 Aktifkan Maintenance', 'admin_toggle_maintenance')
@@ -951,11 +962,11 @@ async function showAdminPanel(ctx: any, isEdit: boolean = false) {
 
   try {
     if (isEdit) {
-      await ctx.editMessageText(text, { parse_mode: 'Markdown', reply_markup: kb });
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: kb });
     } else {
-      await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: kb });
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
     }
   } catch {
-    await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: kb });
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: kb });
   }
 }

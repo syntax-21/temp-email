@@ -112,6 +112,7 @@ export default function AdminDashboard() {
   const [telegramAdminId, setTelegramAdminId] = useState('');
   const [telegramDomain, setTelegramDomain] = useState('');
   const [telegramBotUsername, setTelegramBotUsername] = useState('');
+  const [webhookInfo, setWebhookInfo] = useState<any>(null);
 
   // ─── Auth ─────────────────────────────────────────────────────────
   const applyData = (result: any) => {
@@ -211,7 +212,10 @@ export default function AdminDashboard() {
 
   const setupTelegramWebhook = async () => {
     try {
-      const targetDomain = telegramDomain || window.location.origin;
+      let targetDomain = (telegramDomain || window.location.origin).trim();
+      if (!targetDomain.startsWith('http://') && !targetDomain.startsWith('https://')) {
+        targetDomain = `https://${targetDomain}`;
+      }
       const res = await fetch('/api/admin', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${password}`, 'Content-Type': 'application/json' },
@@ -219,12 +223,39 @@ export default function AdminDashboard() {
       });
       const json = await res.json();
       if (res.ok) {
+        if (json.webhookInfo) setWebhookInfo(json.webhookInfo);
+        if (json.botUsername) setTelegramBotUsername(json.botUsername);
         alert(json.message || 'Webhook Telegram berhasil diaktifkan!');
         refreshData();
       } else {
         alert('Gagal mengaktifkan webhook: ' + json.error);
       }
     } catch { alert('Error jaringan saat mengaktifkan webhook'); }
+  };
+
+  const checkWebhookStatus = async () => {
+    try {
+      const res = await fetch('/api/admin', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${password}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'get_webhook_info' })
+      });
+      const json = await res.json();
+      if (res.ok && json.webhookInfo) {
+        setWebhookInfo(json.webhookInfo);
+        if (json.botUsername) setTelegramBotUsername(json.botUsername);
+        alert(
+          `🔍 STATUS WEBHOOK TELEGRAM:\n\n` +
+          `• URL: ${json.webhookInfo.url || '(Belum disetel / Kosong)'}\n` +
+          `• Pending Updates: ${json.webhookInfo.pending_update_count}\n` +
+          `• Error Terakhir: ${json.webhookInfo.last_error_message || 'Tidak ada (Normal)'}`
+        );
+      } else {
+        alert('Gagal mengambil status: ' + json.error);
+      }
+    } catch {
+      alert('Error jaringan saat mengambil status webhook');
+    }
   };
 
   const saveTelegramSettings = async () => {
@@ -731,20 +762,34 @@ export default function AdminDashboard() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 border-t border-slate-800 pt-5">
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 border-t border-slate-800 pt-5">
                 <button onClick={saveTelegramSettings}
-                  className="bg-slate-800 hover:bg-slate-700 text-white px-4 py-3 rounded-xl font-bold transition-colors text-center text-sm">
-                  1. Simpan Konfigurasi
+                  className="bg-slate-800 hover:bg-slate-700 text-white px-3 py-3 rounded-xl font-bold transition-colors text-center text-xs sm:text-sm">
+                  1. Simpan
                 </button>
                 <button onClick={setupTelegramWebhook}
-                  className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-colors text-center text-sm shadow-lg shadow-blue-900/20">
-                  <RefreshCcw className="w-4 h-4" /> 2. Set Webhook
+                  className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-3 rounded-xl font-bold flex items-center justify-center gap-1.5 transition-colors text-center text-xs sm:text-sm shadow-lg shadow-blue-900/20">
+                  <RefreshCcw className="w-3.5 h-3.5" /> 2. Set Webhook
                 </button>
                 <button onClick={testTelegramBot}
-                  className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-colors text-center text-sm shadow-lg shadow-emerald-900/20">
-                  ⚡ 3. Tes Koneksi Bot
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-3 rounded-xl font-bold flex items-center justify-center gap-1.5 transition-colors text-center text-xs sm:text-sm shadow-lg shadow-emerald-900/20">
+                  ⚡ 3. Tes Bot
+                </button>
+                <button onClick={checkWebhookStatus}
+                  className="bg-purple-600/30 hover:bg-purple-600/50 text-purple-300 border border-purple-500/30 px-3 py-3 rounded-xl font-bold flex items-center justify-center gap-1.5 transition-colors text-center text-xs sm:text-sm">
+                  🔍 Cek Status
                 </button>
               </div>
+
+              {webhookInfo && (
+                <div className="mt-4 p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs font-mono space-y-1">
+                  <p className="text-slate-400">Webhook URL: <span className="text-blue-400 break-all">{webhookInfo.url || '(Belum disetel)'}</span></p>
+                  <p className="text-slate-400">Pending Updates: <span className="text-white">{webhookInfo.pending_update_count}</span></p>
+                  {webhookInfo.last_error_message && (
+                    <p className="text-red-400">Last Error: {webhookInfo.last_error_message}</p>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Global Expiry */}
